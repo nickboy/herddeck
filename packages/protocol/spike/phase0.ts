@@ -20,11 +20,10 @@
 //     derived-id error like "<reqid>:sub:<index>:probe" and no ACK.
 //   - Malformed requests error with id "".
 
-import { connect, type Socket } from "node:net";
+import { type Socket, connect } from "node:net";
 
 const SOCKET =
-  process.argv[2] ??
-  `${process.env.HOME}/.config/herdr/sessions/herddeck-test/herdr.sock`;
+  process.argv[2] ?? `${process.env.HOME}/.config/herdr/sessions/herddeck-test/herdr.sock`;
 const SOURCE = "custom:herddeck-test";
 
 type Json = Record<string, unknown>;

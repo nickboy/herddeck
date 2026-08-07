@@ -16,6 +16,9 @@
     "packages/daemon": {
       "name": "@herddeck/daemon",
       "version": "0.0.1",
+      "dependencies": {
+        "@herddeck/protocol": "workspace:*",
+      },
     },
     "packages/plugin": {
       "name": "@herddeck/plugin",
