@@ -392,8 +392,8 @@ describe("doctor checks", () => {
     expect(result.status).toBe("warn");
   });
 
-  test("checkRunDir fails when directory is missing", () => {
-    const result = checkRunDir(join(dir, "does-not-exist"));
+  test("checkRunDir fails when directory is missing and remote targets exist", () => {
+    const result = checkRunDir(join(dir, "does-not-exist"), true);
     expect(result.status).toBe("fail");
     expect(result.fix).toBeDefined();
   });
@@ -401,15 +401,21 @@ describe("doctor checks", () => {
   test("checkRunDir fails on wrong perms", () => {
     const runDir = join(dir, "run");
     mkdirSync(runDir, { mode: 0o755 });
-    const result = checkRunDir(runDir);
+    const result = checkRunDir(runDir, true);
     expect(result.status).toBe("fail");
     expect(result.fix).toContain("chmod 700");
+  });
+
+  test("checkRunDir is ok when missing but no remote targets configured", () => {
+    const result = checkRunDir(join(dir, "does-not-exist"), false);
+    expect(result.status).toBe("ok");
+    expect(result.detail).toContain("not needed");
   });
 
   test("checkRunDir is ok when perms are 0700", () => {
     const runDir = join(dir, "run");
     mkdirSync(runDir, { mode: 0o700 });
-    const result = checkRunDir(runDir);
+    const result = checkRunDir(runDir, true);
     expect(result.status).toBe("ok");
   });
 });

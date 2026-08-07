@@ -432,8 +432,17 @@ export async function checkLaunchdLoaded(opts: LaunchdCheckOpts): Promise<Doctor
   };
 }
 
-export function checkRunDir(runDir: string): DoctorResult {
+export function checkRunDir(runDir: string, hasRemoteTargets: boolean): DoctorResult {
   if (!existsSync(runDir)) {
+    // The daemon only creates run/ when remote targets exist (that's
+    // where forwarded sockets live) — absence is normal otherwise.
+    if (!hasRemoteTargets) {
+      return {
+        name: "run-dir",
+        status: "ok",
+        detail: `${runDir} not needed (no remote targets configured)`,
+      };
+    }
     return {
       name: "run-dir",
       status: "fail",
@@ -482,15 +491,16 @@ export interface RunDoctorOpts {
 export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorResult[]> {
   const { result: herdrBinaryResult, herdrStatus } = await checkHerdrBinary(opts.exec);
   const socketPath = herdrStatus?.socket ?? opts.localSocketPath;
+  const remoteTargets = readRemoteTargetNames(opts.configPath);
   const results: DoctorResult[] = [
     herdrBinaryResult,
     checkHerdrSocket(socketPath),
     await checkDaemonHealth({ url: opts.daemonUrl, fetchImpl: opts.fetchImpl }),
     checkProtocolMatch(herdrStatus),
     await checkLaunchdLoaded({ exec: opts.exec, uid: opts.uid }),
-    checkRunDir(join(opts.herddeckDir, "run")),
+    checkRunDir(join(opts.herddeckDir, "run"), remoteTargets.length > 0),
   ];
-  for (const name of readRemoteTargetNames(opts.configPath)) {
+  for (const name of remoteTargets) {
     results.push(checkRemoteTunnel(opts.herddeckDir, name));
   }
   return results;

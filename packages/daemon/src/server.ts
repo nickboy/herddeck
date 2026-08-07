@@ -36,7 +36,7 @@ export class DeckServer {
             ok: true,
             version: this.deps.version,
             targets: this.lastTargets,
-            agents: this.lastAgents.length,
+            agents: this.lastAgents,
             plugins: this.sockets.size,
           });
         }
