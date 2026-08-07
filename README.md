@@ -20,7 +20,8 @@ speaks one protocol to every target.
 | `packages/plugin` | Stream Deck plugin (SDK v2) |
 | `packages/cli` | `herddeck` CLI: install / doctor / status / targets |
 
-Development plan and phase results live in `docs/plans/`.
+Development plan and phase results live in `docs/plans/`. CI checks and
+branch protection are documented in `docs/ci.md`.
 
 ## Status
 
