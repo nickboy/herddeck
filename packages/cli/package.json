@@ -2,5 +2,8 @@
   "name": "@herddeck/cli",
   "private": true,
   "version": "0.0.1",
-  "type": "module"
+  "type": "module",
+  "bin": {
+    "herddeck": "./src/herddeck.ts"
+  }
 }

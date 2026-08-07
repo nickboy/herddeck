@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { type HerdDeckConfig, loadConfig, type TargetConfig } from "./config";
+import { type HerdDeckConfig, type TargetConfig, loadConfig } from "./config";
 
 function targetAt(config: HerdDeckConfig, i: number): TargetConfig {
   const t = config.targets[i];

@@ -3,8 +3,8 @@
 // Requires: `herdr --session herddeck-test server` running.
 // Never touches the default session. Cleans up its workspace.
 
-import { TargetMonitor, type TargetState } from "../../src/herdr/monitor.ts";
 import { HerdrClient } from "../../src/herdr/client.ts";
+import { TargetMonitor, type TargetState } from "../../src/herdr/monitor.ts";
 
 const SOCKET = `${process.env.HOME}/.config/herdr/sessions/herddeck-test/herdr.sock`;
 const SOURCE = "custom:herddeck-live-smoke";
@@ -21,7 +21,8 @@ const monitor = new TargetMonitor(
       console.log(`[status] ${state} protocol=${protocol}`);
     },
     agentsChanged: (agents) => {
-      const line = agents.map((a) => `${a.paneId}:${a.agentKind}:${a.status}`).join(" ") || "(none)";
+      const line =
+        agents.map((a) => `${a.paneId}:${a.agentKind}:${a.status}`).join(" ") || "(none)";
       agentLog.push(line);
       console.log(`[agents] ${line}`);
     },
@@ -82,8 +83,6 @@ const last = agentLog[agentLog.length - 1];
 if (last !== "(none)") fail(`agent not removed after workspace.close (last: ${last})`);
 
 console.log("PASS: online, event flow, injection transitions, cleanup all verified");
-console.log(
-  "NOTE: kill/restart recovery is exercised by scripts/live-recovery.sh (separate step)",
-);
+console.log("NOTE: kill/restart recovery is exercised by scripts/live-recovery.sh (separate step)");
 monitor.stop();
 process.exit(0);

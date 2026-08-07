@@ -5,9 +5,9 @@
 // TunnelManager implements it); until a tunnel reports ready, the
 // target shows as offline. The registry never spawns herdr.
 
-import type { CachedAgent } from "./stateCache";
 import type { HerdDeckConfig, TargetConfig } from "./config";
 import { TargetMonitor, type TargetState } from "./herdr/monitor";
+import type { CachedAgent } from "./stateCache";
 import type { AgentSnapshot, SlotStatus, TargetSnapshot } from "./wire";
 
 export interface TunnelProvider {

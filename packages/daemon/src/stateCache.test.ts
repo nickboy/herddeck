@@ -335,11 +335,35 @@ describe("container close cascades", () => {
       tabs: [],
       layouts: [],
       panes: [
-        { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", agent_status: "idle", revision: 1, focused: true },
-        { pane_id: "w2:p1", workspace_id: "w2", tab_id: "w2:t1", agent_status: "idle", revision: 1, focused: false },
+        {
+          pane_id: "w1:p1",
+          workspace_id: "w1",
+          tab_id: "w1:t1",
+          agent_status: "idle",
+          revision: 1,
+          focused: true,
+        },
+        {
+          pane_id: "w2:p1",
+          workspace_id: "w2",
+          tab_id: "w2:t1",
+          agent_status: "idle",
+          revision: 1,
+          focused: false,
+        },
       ],
       agents: [
-        { terminal_id: "t1", pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", agent: "claude", agent_status: "idle", state_change_seq: 1, revision: 1, focused: true },
+        {
+          terminal_id: "t1",
+          pane_id: "w1:p1",
+          workspace_id: "w1",
+          tab_id: "w1:t1",
+          agent: "claude",
+          agent_status: "idle",
+          state_change_seq: 1,
+          revision: 1,
+          focused: true,
+        },
       ],
     });
     expect(cache.agents()).toHaveLength(1);
@@ -358,16 +382,37 @@ describe("container close cascades", () => {
     cache.seedFromSnapshot({
       version: "0.8.0",
       protocol: 19,
-      workspaces: [{ workspace_id: "w1", number: 1, label: null, focused: true, agent_status: "idle" }],
+      workspaces: [
+        { workspace_id: "w1", number: 1, label: null, focused: true, agent_status: "idle" },
+      ],
       tabs: [],
       layouts: [],
       panes: [
-        { pane_id: "w1:p1", workspace_id: "w1", tab_id: "w1:t1", agent_status: "idle", revision: 1, focused: true },
-        { pane_id: "w1:p2", workspace_id: "w1", tab_id: "w1:t2", agent_status: "idle", revision: 1, focused: false },
+        {
+          pane_id: "w1:p1",
+          workspace_id: "w1",
+          tab_id: "w1:t1",
+          agent_status: "idle",
+          revision: 1,
+          focused: true,
+        },
+        {
+          pane_id: "w1:p2",
+          workspace_id: "w1",
+          tab_id: "w1:t2",
+          agent_status: "idle",
+          revision: 1,
+          focused: false,
+        },
       ],
       agents: [],
     });
-    expect(cache.applyEvent({ event: "tab_closed", data: { type: "tab_closed", tab: { tab_id: "w1:t2" } } })).toBe(true);
+    expect(
+      cache.applyEvent({
+        event: "tab_closed",
+        data: { type: "tab_closed", tab: { tab_id: "w1:t2" } },
+      }),
+    ).toBe(true);
     expect(cache.paneIds()).toEqual(["w1:p1"]);
   });
 });

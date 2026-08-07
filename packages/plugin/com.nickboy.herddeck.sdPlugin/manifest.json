@@ -1,0 +1,182 @@
+{
+  "Name": "HerdDeck",
+  "Version": "0.0.1.0",
+  "Author": "nickboy",
+  "Description": "Monitor and control herdr agents on Stream Deck MK.2 via the HerdDeck daemon.",
+  "URL": "https://github.com/nickboy/herddeck",
+  "UUID": "com.nickboy.herddeck",
+  "SDKVersion": 2,
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "14"
+    }
+  ],
+  "Software": {
+    "MinimumVersion": "6.4"
+  },
+  "Icon": "images/agent-slot",
+  "CodePath": "bin/plugin.js",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "Actions": [
+    {
+      "Name": "Placeholder",
+      "UUID": "com.nickboy.herddeck.placeholder",
+      "Icon": "images/placeholder",
+      "Tooltip": "HerdDeck placeholder — reflects daemon bridge state.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/placeholder",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Agent Slot",
+      "UUID": "com.nickboy.herddeck.agent-slot",
+      "Icon": "images/agent-slot",
+      "Tooltip": "Displays one herdr agent.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/agent-slot",
+          "TitleAlignment": "middle",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "Name": "Answer — Yes",
+      "UUID": "com.nickboy.herddeck.answer-yes",
+      "Icon": "images/answer-yes",
+      "Tooltip": "Answer the focused agent's prompt with yes.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/answer-yes",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Answer — No",
+      "UUID": "com.nickboy.herddeck.answer-no",
+      "Icon": "images/answer-no",
+      "Tooltip": "Answer the focused agent's prompt with no.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/answer-no",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Answer — Always",
+      "UUID": "com.nickboy.herddeck.answer-always",
+      "Icon": "images/answer-always",
+      "Tooltip": "Answer the focused agent's prompt with always allow.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/answer-always",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Plan Usage",
+      "UUID": "com.nickboy.herddeck.plan-usage",
+      "Icon": "images/plan-usage",
+      "Tooltip": "Claude Max plan usage — click to cycle metrics.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/plan-usage",
+          "TitleAlignment": "middle",
+          "FontSize": 12
+        }
+      ]
+    },
+    {
+      "Name": "Wispr Flow",
+      "UUID": "com.nickboy.herddeck.wispr-flow",
+      "Icon": "images/wispr-flow",
+      "Tooltip": "Trigger Wispr Flow hands-free dictation.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/wispr-flow",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Menu",
+      "UUID": "com.nickboy.herddeck.menu",
+      "Icon": "images/menu",
+      "Tooltip": "HerdDeck menu — click to page through agents beyond the visible slots.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/menu",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Arrow Up",
+      "UUID": "com.nickboy.herddeck.arrow-up",
+      "Icon": "images/arrow-up",
+      "Tooltip": "Send ↑ to the focused agent.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/arrow-up",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Arrow Down",
+      "UUID": "com.nickboy.herddeck.arrow-down",
+      "Icon": "images/arrow-down",
+      "Tooltip": "Send ↓ to the focused agent.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/arrow-down",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Enter",
+      "UUID": "com.nickboy.herddeck.enter",
+      "Icon": "images/enter",
+      "Tooltip": "Send ⏎ (Return) to the focused agent — submit prompts.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/enter",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    }
+  ],
+  "Category": "Developer Tools",
+  "CategoryIcon": "images/agent-slot"
+}
