@@ -24,6 +24,135 @@ Development plan and phase results live in `docs/plans/`.
 
 ## Status
 
-Phase 0 (bootstrap + live API spike) in progress. Pinned to herdr
-protocol 19 (herdr 0.8.0); the daemon pings and compares protocol
-versions per target on connect.
+v0.1: daemon, plugin, and CLI implemented and live-verified against
+herdr 0.8.0 (protocol 19); the daemon pings and compares protocol
+versions per target on connect and degrades mismatched targets to a
+warning state. Remaining field work: the physical Stream Deck
+hardware checklist and real remote-host tunnel validation (master
+plan Phases 2-3).
+
+## Setup
+
+### Prerequisites
+
+- [herdr](https://herdr.dev) ≥ 0.8.0 (protocol 19) running on every
+  machine you want HerdDeck to see, local or remote.
+- [Bun](https://bun.sh) ≥ 1.2.
+- The Stream Deck app (macOS, Apple Silicon), for the plugin half.
+
+### Install
+
+```bash
+git clone git@github.com:nickboy/herddeck.git
+cd herddeck
+./install.sh
+```
+
+`install.sh` installs dependencies, runs the test suite, and bootstraps
+the daemon as a `launchd` LaunchAgent (`bun packages/daemon/src/index.ts`,
+no `.app` bundle, no Accessibility/TCC — herdr's socket API replaces all
+of that; see `docs/CONTRACTS.md`).
+
+Next, link the Stream Deck plugin:
+
+```bash
+streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin
+```
+
+or double-click `packages/plugin/com.nickboy.herddeck.sdPlugin` in
+Finder to have Stream Deck.app install it directly. Once published,
+the plugin will also be available from the Elgato Marketplace.
+
+Then verify everything is wired up:
+
+```bash
+herddeck doctor
+```
+
+`doctor` checks herdr is on `PATH` with a matching protocol version, the
+local herdr socket exists with sane permissions, the daemon's `/health`
+endpoint responds, the `launchd` job is loaded, `~/.herddeck/run/` has
+0700 permissions, and (per remote target) that its tunnel socket is up.
+
+### Configuration
+
+Targets, the daemon port, and the terminal app used for `agent:focus`
+all live in `~/.herddeck/config.toml`. A missing file defaults to a
+single local target on herdr's default socket.
+
+```toml
+[daemon]
+port = 9137            # optional, default 9137
+
+[ui]
+terminal_app = "Ghostty"  # optional
+
+[plan_usage]
+enabled = true         # optional, default true
+
+[[targets]]
+name = "local"         # required, unique, [a-z0-9-]+
+kind = "local"         # "local" | "remote"
+socket = "~/.config/herdr/herdr.sock"   # optional; default for local
+session = "name"       # optional named session → ~/.config/herdr/sessions/<name>/herdr.sock
+
+[[targets]]
+name = "workbox"
+kind = "remote"
+host = "workbox"                          # ssh destination (~/.ssh/config applies)
+remote_socket = "~/.config/herdr/herdr.sock"  # path on the remote
+```
+
+### Context donut (statusline hookup)
+
+The Agent Slot key's context-window donut is populated by
+`AgentInfo.tokens.ctx_pct`, which HerdDeck reads straight from herdr — no
+daemon-side polling is involved. Getting a value in there requires
+chaining `scripts/herddeck-statusline.sh` into Claude Code's statusline
+so it reports `context_window.percentUsed` to herdr on every turn via
+`pane.report_metadata`. Add it to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "/absolute/path/to/herddeck/scripts/herddeck-statusline.sh"
+  }
+}
+```
+
+If you already have a statusline command, chain it in front instead of
+replacing it — `herddeck-statusline.sh` reads the upstream command's
+rendered text off the `display` field of its own stdin JSON and echoes
+it verbatim, so it never clobbers a richer statusline. The script relies
+on herdr's injected `HERDR_PANE_ID` / `HERDR_SOCKET_PATH` environment
+variables and fails silently (never breaks the prompt) when they're
+absent. Token metadata doesn't survive a herdr server restart, but the
+statusline re-reports every turn, so it self-heals within one turn.
+
+### Remote targets
+
+Remote targets are reached by forwarding the remote `herdr.sock` over
+SSH (`TunnelManager`, lazy `ssh -N -L`, `~/.herddeck/run/<target>.sock`
+locally). The tunnel runs non-interactively (`BatchMode=yes`), so the
+target's SSH auth must not require a prompt:
+
+- Key-based or `ssh-agent`-based auth only — no password prompts.
+  `ssh -o BatchMode=yes <host>` should succeed with zero interaction
+  before you add the target to `config.toml`.
+- The remote sshd needs `AllowStreamLocalForwarding` enabled for the
+  unix-socket `-L` forward (this is the default; `StreamLocalBindUnlink`
+  is unrelated — that setting only affects `-R` remote forwards).
+- If your SSH key lives in 1Password, launchd does **not** inherit
+  `SSH_AUTH_SOCK` from your login shell, so the daemon's `ssh` process
+  can't find the agent unless the target's `~/.ssh/config` entry
+  hardcodes the agent socket:
+
+  ```text
+  Host workbox
+    IdentityAgent ~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock
+  ```
+
+See the Phase 3 notes in `docs/plans/2026-08-06-master-plan.md` for the
+full verification checklist (network-drop recovery, protocol-mismatch
+handling, etc.).

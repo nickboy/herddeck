@@ -222,6 +222,84 @@ describe("AgentSlotManager focus tracking", () => {
   });
 });
 
+describe("AgentSlotManager target filter", () => {
+  test("targetFilter defaults to null (all targets)", () => {
+    const mgr = new AgentSlotManager();
+    expect(mgr.targetFilter()).toBeNull();
+  });
+
+  test("visibleAgents returns the full list when filter is null", () => {
+    const mgr = new AgentSlotManager();
+    const agents = [makeAgent("local", "p1"), makeAgent("workbox", "p2")];
+    mgr.setAgents(agents);
+    expect(mgr.visibleAgents()).toEqual(agents);
+  });
+
+  test("visibleAgents narrows to the filtered target", () => {
+    const mgr = new AgentSlotManager();
+    const local1 = makeAgent("local", "p1");
+    const local2 = makeAgent("local", "p2");
+    const remote = makeAgent("workbox", "p3");
+    mgr.setAgents([local1, remote, local2]);
+    mgr.setTargetFilter("local");
+    expect(mgr.visibleAgents()).toEqual([local1, local2]);
+  });
+
+  test("size/pageCount/agentAt read through the filter", () => {
+    const mgr = new AgentSlotManager({ maxSlots: 2 });
+    mgr.setAgents([
+      makeAgent("local", "p1"),
+      makeAgent("workbox", "p2"),
+      makeAgent("local", "p3"),
+      makeAgent("local", "p4"),
+    ]);
+    mgr.setTargetFilter("local");
+    expect(mgr.size()).toBe(3);
+    expect(mgr.pageCount()).toBe(2); // ceil(3/2)
+    expect(mgr.agentAt(0)?.paneId).toBe("p1");
+    expect(mgr.agentAt(1)?.paneId).toBe("p3");
+  });
+
+  test("setTargetFilter resets to page 0", () => {
+    const mgr = new AgentSlotManager({ maxSlots: 1 });
+    mgr.setAgents([makeAgent("local", "p1"), makeAgent("local", "p2")]);
+    mgr.nextPage();
+    expect(mgr.currentPage()).toBe(1);
+    mgr.setTargetFilter("local");
+    expect(mgr.currentPage()).toBe(0);
+  });
+
+  test("setTargetFilter(null) clears the filter back to all targets", () => {
+    const mgr = new AgentSlotManager();
+    mgr.setAgents([makeAgent("local", "p1"), makeAgent("workbox", "p2")]);
+    mgr.setTargetFilter("local");
+    expect(mgr.size()).toBe(1);
+    mgr.setTargetFilter(null);
+    expect(mgr.size()).toBe(2);
+    expect(mgr.targetFilter()).toBeNull();
+  });
+
+  test("filtering out the focused agent does not clear focus", () => {
+    const mgr = new AgentSlotManager();
+    mgr.setAgents([makeAgent("local", "p1"), makeAgent("workbox", "p2")]);
+    mgr.setFocused({ target: "workbox", paneId: "p2" });
+    const listener = mock();
+    mgr.on("focus-lost", listener);
+    mgr.setTargetFilter("local");
+    expect(mgr.getFocused()).toEqual({ target: "workbox", paneId: "p2" });
+    expect(mgr.getFocusedAgent()?.paneId).toBe("p2");
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  test("list() stays unfiltered regardless of the target filter", () => {
+    const mgr = new AgentSlotManager();
+    const agents = [makeAgent("local", "p1"), makeAgent("workbox", "p2")];
+    mgr.setAgents(agents);
+    mgr.setTargetFilter("local");
+    expect(mgr.list()).toEqual(agents);
+  });
+});
+
 describe("slotFromCoordinates", () => {
   test("row 0, columns 0-4 map to slots 0-4", () => {
     for (let col = 0; col <= 4; col++) {

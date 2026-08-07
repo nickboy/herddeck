@@ -175,6 +175,48 @@
           "FontSize": 14
         }
       ]
+    },
+    {
+      "Name": "Worktree",
+      "UUID": "com.nickboy.herddeck.worktree",
+      "Icon": "images/worktree",
+      "Tooltip": "Create a herdr worktree for the focused agent's target.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/worktree",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
+    },
+    {
+      "Name": "Canned Prompt",
+      "UUID": "com.nickboy.herddeck.canned-prompt",
+      "Icon": "images/enter",
+      "Tooltip": "Send a canned prompt (configurable, default \"continue\") to the focused agent.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/enter",
+          "TitleAlignment": "middle",
+          "FontSize": 11
+        }
+      ]
+    },
+    {
+      "Name": "Target Switcher",
+      "UUID": "com.nickboy.herddeck.target-switcher",
+      "Icon": "images/target-switcher",
+      "Tooltip": "Cycle the agent slot row's target filter — all targets, then one at a time.",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "images/target-switcher",
+          "TitleAlignment": "middle",
+          "FontSize": 14
+        }
+      ]
     }
   ],
   "Category": "Developer Tools",

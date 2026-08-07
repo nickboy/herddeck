@@ -41,6 +41,7 @@ export class AgentSlotManager extends EventEmitter {
   private readonly maxSlots: number;
   private page = 0;
   private focused: AgentKey | undefined;
+  private filter: string | null = null;
 
   constructor(opts: AgentSlotManagerOptions = {}) {
     super();
@@ -64,13 +65,26 @@ export class AgentSlotManager extends EventEmitter {
     }
   }
 
-  /** Full list in daemon order. */
+  /** Full list in daemon order, ignoring any target filter. */
   list(): readonly AgentSnapshot[] {
     return this.agentsList;
   }
 
+  /**
+   * The daemon-ordered list narrowed to the current target filter (or
+   * the full list when the filter is `null` — "all"). Slots, paging,
+   * and the agent count all read through this rather than
+   * `agentsList` directly, so a Target Switcher press immediately
+   * changes what's visible without touching daemon state.
+   */
+  visibleAgents(): readonly AgentSnapshot[] {
+    if (this.filter === null) return this.agentsList;
+    const filter = this.filter;
+    return this.agentsList.filter((a) => a.target === filter);
+  }
+
   size(): number {
-    return this.agentsList.length;
+    return this.visibleAgents().length;
   }
 
   maxSlotsCount(): number {
@@ -78,7 +92,7 @@ export class AgentSlotManager extends EventEmitter {
   }
 
   pageCount(): number {
-    return Math.max(1, Math.ceil(this.agentsList.length / this.maxSlots));
+    return Math.max(1, Math.ceil(this.visibleAgents().length / this.maxSlots));
   }
 
   currentPage(): number {
@@ -94,7 +108,24 @@ export class AgentSlotManager extends EventEmitter {
   /** Returns the agent at the given 0-indexed slot on the CURRENT page, or undefined. */
   agentAt(slot: number): AgentSnapshot | undefined {
     if (slot < 0 || slot >= this.maxSlots) return undefined;
-    return this.agentsList[this.page * this.maxSlots + slot];
+    return this.visibleAgents()[this.page * this.maxSlots + slot];
+  }
+
+  /** Current target filter — `null` means "all targets" (no narrowing). */
+  targetFilter(): string | null {
+    return this.filter;
+  }
+
+  /**
+   * Narrow (or clear, with `null`) the target filter driving
+   * `visibleAgents()`/paging/`agentAt()`. Resets to page 0 — the
+   * previous page offset is meaningless against a differently-sized
+   * filtered set. Does not touch focus: an agent stays focused (and
+   * answerable) even while filtered out of the visible slot row.
+   */
+  setTargetFilter(name: string | null): void {
+    this.filter = name;
+    this.page = 0;
   }
 
   getFocused(): AgentKey | undefined {

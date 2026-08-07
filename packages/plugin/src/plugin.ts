@@ -46,11 +46,14 @@ import { AgentSlotAction, renderAgentSlot, renderAgentSlotImage } from "./action
 import type { AnswerFocusTarget } from "./actions/answer";
 import { renderAnswerKey } from "./actions/answer";
 import { renderArrowKey } from "./actions/arrowKey";
+import { CannedPromptAction } from "./actions/cannedPrompt";
 import { renderMenu } from "./actions/menu";
 import { renderPlaceholder } from "./actions/placeholder";
 import { PlanAutoCycle } from "./actions/planAutoCycle";
 import { cyclePlanMode, renderPlanUsage, renderPlanUsageImage } from "./actions/planUsage";
+import { TargetSwitcherAction } from "./actions/targetSwitcher";
 import { renderWisprFlow } from "./actions/wisprFlow";
+import { WorktreeAction } from "./actions/worktree";
 import { AgentSlotManager, slotFromCoordinates } from "./agentSlots";
 import { BridgeClient, type BridgeState } from "./bridgeClient";
 import type { AnswerKind, PlanMetric, PlanMetricKey, TargetSnapshot, WsEvent } from "./wire";
@@ -326,6 +329,22 @@ const arrowUpAction = new ArrowUpAction();
 const arrowDownAction = new ArrowDownAction();
 const enterAction = new EnterAction();
 const menuAction = new MenuAction();
+const worktreeAction = new WorktreeAction({
+  bridge,
+  manager: slotManager,
+  getTargets: () => targets,
+});
+const cannedPromptAction = new CannedPromptAction({ bridge, manager: slotManager });
+const targetSwitcherAction = new TargetSwitcherAction({
+  manager: slotManager,
+  getTargets: () => targets,
+  // Filter changes narrow/widen `visibleAgents()` — the slot row and
+  // MENU's page count both need to reflect that immediately.
+  onFilterChanged: async () => {
+    await repaintSlots();
+    await repaintMenu();
+  },
+});
 
 async function repaintAnswers(): Promise<void> {
   const target = currentAnswerTarget();
@@ -408,6 +427,7 @@ bridge.on("state", async (state: BridgeState) => {
   await repaintMenu();
   await repaintWisprFlow();
   await repaintArrows();
+  await worktreeAction.repaint();
 });
 
 bridge.on("event", async (event: WsEvent) => {
@@ -423,10 +443,13 @@ bridge.on("event", async (event: WsEvent) => {
       // the managers get repopulated with the actual live set.
       slotManager.setAgents([]);
       slotManager.setFocused(undefined);
+      slotManager.setTargetFilter(null);
       targets = [];
       await repaintSlots();
       await repaintAnswers();
       await repaintMenu();
+      await worktreeAction.clearPending();
+      await targetSwitcherAction.repaint();
       return;
     }
     case "targets:update": {
@@ -441,6 +464,10 @@ bridge.on("event", async (event: WsEvent) => {
       await repaintSlots();
       await repaintAnswers();
       await repaintMenu();
+      // A confirmed worktree.create surfaces as a new agent in this
+      // very list — that's the daemon-side signal the in-flight "…"
+      // indicator should clear (docs/CONTRACTS.md Phase 4).
+      await worktreeAction.clearPending();
       return;
     }
     case "plan:update": {
@@ -473,6 +500,9 @@ streamDeck.actions.registerAction(arrowUpAction);
 streamDeck.actions.registerAction(arrowDownAction);
 streamDeck.actions.registerAction(enterAction);
 streamDeck.actions.registerAction(menuAction);
+streamDeck.actions.registerAction(worktreeAction);
+streamDeck.actions.registerAction(cannedPromptAction);
+streamDeck.actions.registerAction(targetSwitcherAction);
 
 // Start auto-cycling between 5h / 7d (and any future buckets) on the
 // Plan Usage key. Self-suppresses when fewer than 2 metrics are known
