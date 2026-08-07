@@ -47,7 +47,7 @@ curated types above stay the stable import surface).
 
 ## packages/daemon layout
 
-```
+```text
 src/paths.ts        # ~/.herddeck dirs (config.toml, run/, daemon.log); mkdir run/ with 0700
 src/config.ts       # config load/parse (shape below)
 src/herdr/client.ts # call() + EventStream (transport only)

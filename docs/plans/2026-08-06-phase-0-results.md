@@ -88,3 +88,20 @@ and the second request never appears in the server log.
 - `done`-state behavior with an attached client (Phase 2).
 - `pane.moved` id-reassignment live test (Phase 1).
 - Remote tunnel day-1 checks (Phase 3, needs the work box).
+
+## Addendum — Phase 1 live-integration discoveries (2026-08-07)
+
+- **Container closes don't emit pane events**: `workspace.close` /
+  tab close emit only `workspace_closed` / `tab_closed` — no
+  `pane_closed` for the panes inside. StateCache cascade-removes
+  panes on the container event.
+- **`workspace.close` completes asynchronously**: the ok response
+  returns immediately; pane processes wind down for ~1-2s before the
+  `workspace_closed` event fires.
+- **New subscribers get synthetic replay**: an events.subscribe
+  stream receives `pane_created` events for panes that already
+  existed. Harmless under the subscribe-first-then-snapshot ordering
+  (replay dedupe drops them), but explains "stale" creates on fresh
+  streams.
+- Kill/restart recovery verified live: online → offline (capped
+  backoff) → online within one retry of the server returning.

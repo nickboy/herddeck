@@ -35,3 +35,25 @@ jobs:
           bun-version: latest
       - run: bun install --frozen-lockfile
       - run: bun test
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck all shell scripts
+        run: |
+          files=$(git ls-files '*.sh')
+          if [ -n "$files" ]; then
+            # shellcheck disable is per-file; -x follows sourced files
+            echo "$files" | xargs shellcheck -x
+          else
+            echo "no shell scripts"
+          fi
+
+  markdownlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: markdownlint all markdown files
+        run: |
+          npx --yes markdownlint-cli $(git ls-files '*.md')
