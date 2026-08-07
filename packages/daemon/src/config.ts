@@ -32,7 +32,7 @@ function parseToml(content: string): Record<string, unknown> {
   const lines = content.split("\n");
 
   for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
+    let line = lines[i] ?? "";
 
     // Strip comments
     const commentIdx = line.indexOf("#");
@@ -73,7 +73,8 @@ function parseToml(content: string): Record<string, unknown> {
 
       if (currentArray !== null) {
         const arr = result[currentArray] as Record<string, unknown>[];
-        arr[arrayIndex][key] = value;
+        const entry = arr[arrayIndex];
+        if (entry) entry[key] = value;
       } else if (currentSection !== null) {
         const section = result[currentSection] as Record<string, unknown>;
         section[key] = value;

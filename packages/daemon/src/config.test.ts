@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { type HerdDeckConfig, loadConfig } from "./config";
+import { type HerdDeckConfig, loadConfig, type TargetConfig } from "./config";
+
+function targetAt(config: HerdDeckConfig, i: number): TargetConfig {
+  const t = config.targets[i];
+  if (!t) throw new Error(`no target at index ${i}`);
+  return t;
+}
 
 describe("config", () => {
   let tempDir: string;
@@ -35,7 +41,7 @@ describe("config", () => {
       expect(config.terminalApp).toBe("Ghostty");
       expect(config.planUsageEnabled).toBe(true);
       expect(config.targets).toHaveLength(1);
-      expect(config.targets[0]).toEqual({
+      expect(targetAt(config, 0)).toEqual({
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/herdr.sock"),
@@ -94,7 +100,7 @@ socket = "~/.config/herdr/herdr.sock"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(1);
-      expect(config.targets[0]).toEqual({
+      expect(targetAt(config, 0)).toEqual({
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/herdr.sock"),
@@ -114,7 +120,7 @@ session = "mysession"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(1);
-      expect(config.targets[0]).toEqual({
+      expect(targetAt(config, 0)).toEqual({
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/sessions/mysession/herdr.sock"),
@@ -133,7 +139,7 @@ kind = "local"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(1);
-      expect(config.targets[0]).toEqual({
+      expect(targetAt(config, 0)).toEqual({
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/herdr.sock"),
@@ -154,7 +160,7 @@ remote_socket = "~/.config/herdr/herdr.sock"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(1);
-      const target = config.targets[0];
+      const target = targetAt(config, 0);
       expect(target.kind).toBe("remote");
       expect(target.name).toBe("workbox");
       if (target.kind === "remote") {
@@ -177,7 +183,7 @@ host = "workbox.example.com"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(1);
-      const target = config.targets[0];
+      const target = targetAt(config, 0);
       if (target.kind === "remote") {
         expect(target.remoteSocket).toBe("~/.config/herdr/herdr.sock");
       }
@@ -200,10 +206,10 @@ host = "workbox.example.com"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(2);
-      expect(config.targets[0].name).toBe("local");
-      expect(config.targets[0].kind).toBe("local");
-      expect(config.targets[1].name).toBe("workbox");
-      expect(config.targets[1].kind).toBe("remote");
+      expect(targetAt(config, 0).name).toBe("local");
+      expect(targetAt(config, 0).kind).toBe("local");
+      expect(targetAt(config, 1).name).toBe("workbox");
+      expect(targetAt(config, 1).kind).toBe("remote");
     });
 
     test("throws on duplicate target names", () => {
@@ -287,8 +293,8 @@ kind = "local"
 
       const config = loadConfig(configPath);
       expect(config.targets).toHaveLength(2);
-      expect(config.targets[0].name).toBe("local-box-1");
-      expect(config.targets[1].name).toBe("workbox-v2");
+      expect(targetAt(config, 0).name).toBe("local-box-1");
+      expect(targetAt(config, 1).name).toBe("workbox-v2");
     });
 
     test("throws when remote target missing host", () => {
@@ -384,7 +390,7 @@ socket = "~/custom/herdr.sock"
       );
 
       const config = loadConfig(configPath);
-      const target = config.targets[0];
+      const target = targetAt(config, 0);
       if (target.kind === "local") {
         expect(target.socket).toBe(path.join(tempDir, "custom/herdr.sock"));
         expect(target.socket).not.toContain("~");
@@ -404,7 +410,7 @@ remote_socket = "~/custom/herdr.sock"
       );
 
       const config = loadConfig(configPath);
-      const target = config.targets[0];
+      const target = targetAt(config, 0);
       if (target.kind === "remote") {
         expect(target.remoteSocket).toBe("~/custom/herdr.sock");
       }

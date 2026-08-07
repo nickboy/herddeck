@@ -3,7 +3,7 @@
 // JSON frames; state flows out as WsEvent frames, broadcast to every
 // connected plugin instance.
 
-import type { Server, ServerWebSocket } from "bun";
+import type { ServerWebSocket } from "bun";
 import { answerKeys } from "./answerMap";
 import { HerdrApiError } from "./herdr/client";
 import type { SessionRegistry } from "./registry";
@@ -18,7 +18,7 @@ export interface ServerDeps {
 }
 
 export class DeckServer {
-  private server: Server | null = null;
+  private server: ReturnType<typeof Bun.serve> | null = null;
   private sockets = new Set<ServerWebSocket<unknown>>();
   private lastAgents: AgentSnapshot[] = [];
   private lastTargets: TargetSnapshot[] = [];
@@ -40,7 +40,8 @@ export class DeckServer {
             plugins: this.sockets.size,
           });
         }
-        if (url.pathname === "/ws" && server.upgrade(req)) return undefined as unknown as Response;
+        if (url.pathname === "/ws" && server.upgrade(req, { data: undefined }))
+          return undefined as unknown as Response;
         return new Response("not found", { status: 404 });
       },
       websocket: {
@@ -50,7 +51,9 @@ export class DeckServer {
           this.send(ws, { type: "targets:update", targets: this.lastTargets });
           this.send(ws, { type: "agents:update", agents: this.lastAgents });
         },
-        close: (ws) => this.sockets.delete(ws),
+        close: (ws) => {
+          this.sockets.delete(ws);
+        },
         message: (_ws, message) => {
           void this.handleCommand(String(message));
         },
