@@ -118,8 +118,7 @@ export class LineDecoder {
   push(chunk: string): unknown[] {
     this.buf += chunk;
     const out: unknown[] = [];
-    let idx: number;
-    while ((idx = this.buf.indexOf("\n")) >= 0) {
+    for (let idx = this.buf.indexOf("\n"); idx >= 0; idx = this.buf.indexOf("\n")) {
       const line = this.buf.slice(0, idx);
       this.buf = this.buf.slice(idx + 1);
       if (line.trim().length > 0) out.push(JSON.parse(line));

@@ -26,12 +26,14 @@ const { SessionRegistry } = await import("../../src/registry.ts");
 const { DeckServer } = await import("../../src/server.ts");
 
 const config = loadConfig(CONFIG);
-let server: DeckServer;
+let focusCalled = false;
+// `server` is referenced before its declaration below — safe, events
+// only fire after registry.start().
 const registry = new SessionRegistry(config, {
-  targetsChanged: (targets) => server?.broadcast({ type: "targets:update", targets }),
-  agentsChanged: (agents) => server?.broadcast({ type: "agents:update", agents }),
+  targetsChanged: (targets) => server.broadcast({ type: "targets:update", targets }),
+  agentsChanged: (agents) => server.broadcast({ type: "agents:update", agents }),
 });
-server = new DeckServer({
+const server = new DeckServer({
   registry,
   version: "e2e",
   focusTerminal: async () => {
@@ -39,7 +41,6 @@ server = new DeckServer({
   },
   wispr: { start: () => {}, stop: () => {} },
 });
-let focusCalled = false;
 server.start(PORT);
 registry.start();
 

@@ -19,18 +19,19 @@ const config = loadConfig();
 const hasRemote = config.targets.some((t) => t.kind === "remote");
 const tunnels = hasRemote ? new TunnelManager(ensureRunDir()) : undefined;
 
-let server: DeckServer;
-
+// The registry's callbacks reference `server`, declared below — safe
+// because events only fire after registry.start(), which runs after
+// the server exists.
 const registry = new SessionRegistry(
   config,
   {
-    targetsChanged: (targets) => server?.broadcast({ type: "targets:update", targets }),
-    agentsChanged: (agents) => server?.broadcast({ type: "agents:update", agents }),
+    targetsChanged: (targets) => server.broadcast({ type: "targets:update", targets }),
+    agentsChanged: (agents) => server.broadcast({ type: "agents:update", agents }),
   },
   tunnels,
 );
 
-server = new DeckServer({
+const server = new DeckServer({
   registry,
   version: VERSION,
   focusTerminal: () => focusTerminalApp(config.terminalApp),

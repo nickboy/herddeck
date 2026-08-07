@@ -33,8 +33,7 @@ function ndjsonReader(sock: Socket, onLine: (msg: Json) => void) {
   sock.setEncoding("utf8");
   sock.on("data", (chunk: string) => {
     buf += chunk;
-    let idx: number;
-    while ((idx = buf.indexOf("\n")) >= 0) {
+    for (let idx = buf.indexOf("\n"); idx >= 0; idx = buf.indexOf("\n")) {
       const line = buf.slice(0, idx);
       buf = buf.slice(idx + 1);
       if (line.trim()) onLine(JSON.parse(line) as Json);
