@@ -2,5 +2,8 @@
   "name": "@herddeck/daemon",
   "private": true,
   "version": "0.0.1",
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@herddeck/protocol": "workspace:*"
+  }
 }

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# install.sh — one-command HerdDeck install.
+#
+# bun install → bun test → `herddeck install` (writes + bootstraps the
+# daemon's LaunchAgent). No .app bundle, no codesigning, no
+# Accessibility/TCC — herdr replaced all of that (see
+# docs/CONTRACTS.md, docs/plans/2026-08-06-master-plan.md). The daemon
+# just runs as `bun packages/daemon/src/index.ts` under launchd.
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v bun >/dev/null 2>&1; then
+  echo "herddeck: bun is required (>= 1.2)." >&2
+  echo "  Install with: brew install oven-sh/bun/bun" >&2
+  exit 1
+fi
+
+echo "herddeck: installing dependencies..."
+bun install --frozen-lockfile --cwd "$REPO_ROOT"
+
+echo "herddeck: running test suite..."
+(cd "$REPO_ROOT" && bun test)
+
+echo "herddeck: bootstrapping daemon LaunchAgent..."
+bun "$REPO_ROOT/packages/cli/src/herddeck.ts" install "$@"
+
+cat <<'EOF'
+
+herddeck installed.
+
+Next steps:
+  1. Health check:      herddeck doctor
+  2. Inspect targets:   herddeck status
+  3. Install the Stream Deck plugin (packages/plugin, SDK v2) — via the
+     Elgato Marketplace once published, or for local dev:
+       streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin
+     (see packages/plugin/README.md).
+
+EOF

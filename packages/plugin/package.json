@@ -2,5 +2,16 @@
   "name": "@herddeck/plugin",
   "private": true,
   "version": "0.0.1",
-  "type": "module"
+  "type": "module",
+  "main": "src/plugin.ts",
+  "scripts": {
+    "build": "mkdir -p com.nickboy.herddeck.sdPlugin/images && cp assets/*.svg com.nickboy.herddeck.sdPlugin/images/ && bun build --target=node src/plugin.ts --outfile com.nickboy.herddeck.sdPlugin/bin/plugin.js"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "^2.1.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
+  }
 }
