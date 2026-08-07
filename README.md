@@ -63,6 +63,14 @@ or double-click `packages/plugin/com.nickboy.herddeck.sdPlugin` in
 Finder to have Stream Deck.app install it directly. Once published,
 the plugin will also be available from the Elgato Marketplace.
 
+Then import the pre-arranged MK.2 layout: double-click
+`packages/plugin/com.nickboy.herddeck.sdPlugin/HerdDeck.streamDeckProfile`
+(regenerate with `bun packages/plugin/scripts/generateProfile.ts`).
+Page 1 mirrors ClaudeDeck's proven layout — five agent slots on top,
+answer keys + Wispr Flow + Plan Usage in the middle, arrows/Enter nav
+cluster at the bottom. Page 2 holds the herdr-native keys (worktree,
+canned prompt, target switcher, slot paging).
+
 Then verify everything is wired up:
 
 ```bash
