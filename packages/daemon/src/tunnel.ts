@@ -222,6 +222,14 @@ export class TunnelManager implements TunnelProvider {
       "-N",
       "-o",
       "BatchMode=yes",
+      // Own the connection lifecycle: with the user's ControlMaster
+      // auto config the tunnel would otherwise mux onto (or become) a
+      // shared master and its forward would die with that master's
+      // ControlPersist timer (found live in Tier-1 testing).
+      "-o",
+      "ControlMaster=no",
+      "-o",
+      "ControlPath=none",
       "-o",
       "ExitOnForwardFailure=yes",
       "-o",
