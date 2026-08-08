@@ -39,9 +39,61 @@ branch protection are documented in `docs/ci.md`.
 v0.1: daemon, plugin, and CLI implemented and live-verified against
 herdr 0.8.0 (protocol 19); the daemon pings and compares protocol
 versions per target on connect and degrades mismatched targets to a
-warning state. Remaining field work: the physical Stream Deck
-hardware checklist and real remote-host tunnel validation (master
-plan Phases 2-3).
+warning state. Deployed across two machines — laptop running the Stream
+Deck and daemon, desktop running herdr and the agents, joined by an SSH
+tunnel — with all five agent slots, the context donuts, and plan usage
+live.
+
+Remaining field work: pressing an answer key against a real blocked
+prompt, to confirm the `["1","enter"]` mapping on hardware.
+
+## Known limitations and future work
+
+### The context window size is a constant
+
+`herddeck-ctx-scan` divides a session's token count by an assumed 1M
+window. That number is not discoverable anywhere the script can reach:
+
+| Source | Has the window size? |
+| --- | --- |
+| statusline payload | yes — `context_window.context_window_size` |
+| transcript `.jsonl` | no — `message.model` drops the `[1m]` marker |
+| `~/.claude/sessions/<pid>.json` | no |
+| `~/.claude/settings.json` | only the *default* model, wrong after `/model` |
+| hook payloads | no — excluded by the hooks documentation |
+
+A model→window lookup table was rejected on purpose: it rots on every
+model release, and being silently wrong about a percentage is worse than
+not showing one. So the token count — which is always correct — is what
+the script actually derives, and only the final division depends on the
+constant. An overrun clamps to 100% rather than drawing a 216% ring.
+
+Open question worth revisiting: whether Anthropic exposes per-model
+context windows in a machine-readable form that a tool could read
+instead of assuming.
+
+### Prefer the statusline route where you can edit it
+
+Both routes were run side by side against the same four live sessions and
+agreed exactly, but they are not equivalent in robustness:
+
+| | statusline | `ctx-scan` |
+| --- | --- | --- |
+| Percentage | exact, from Claude Code | needs the window assumption above |
+| Coverage | every session | needs two fallbacks to match |
+| Cost | none | one polling process |
+| Requires | editing that machine's statusline | nothing |
+
+`ctx-scan` exists for machines whose statusline belongs to someone else.
+It is the fallback, not the default.
+
+### herdr does not always know a pane's Claude session
+
+Observed live: `agent_session` was `null` for one of four Claude panes.
+`ctx-scan` recovers those by joining herdr's per-pane process list against
+`claude agents --json`, but a pane neither route resolves is skipped
+rather than guessed at — its donut stays dark. Worth revisiting if herdr's
+own detection improves.
 
 ## Setup
 
