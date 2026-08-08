@@ -68,9 +68,33 @@ not showing one. So the token count — which is always correct — is what
 the script actually derives, and only the final division depends on the
 constant. An overrun clamps to 100% rather than drawing a 216% ring.
 
+That rejection is not theoretical. A survey of the ecosystem found two
+shipping tools reporting context five times too low for exactly this
+reason: both normalise the model string without stripping the `[1m]`
+long-context suffix, so a 1M session misses the table and falls back to
+a 200K family entry. A table does not fail loudly when a new window
+ships — it keeps answering, wrongly.
+
+The statusline route avoids the whole question by construction: Claude
+Code resolves the window itself (including the `[1m]` suffix and the
+`context-1m` beta) and hands the statusline an already-computed
+`used_percentage`. Reading that number is why the preferred route cannot
+rot.
+
 Open question worth revisiting: whether Anthropic exposes per-model
 context windows in a machine-readable form that a tool could read
 instead of assuming.
+
+One claim to keep an eye on: it has been argued elsewhere that deriving
+usage from the transcript systematically under-reports, because
+per-message usage excludes system-prompt, tool-schema and MCP overhead.
+Measurement here does not support that for the figure `ctx-scan`
+actually computes — it agreed exactly with the statusline on three live
+sessions, one of them running several MCP servers, because the newest
+request's `input + cache_creation + cache_read` is the same quantity
+Claude Code itself divides. The caveat likely applies to summing
+per-message tokens instead. Recorded as a risk to re-check, not as a
+known defect.
 
 ### Prefer the statusline route where you can edit it
 
