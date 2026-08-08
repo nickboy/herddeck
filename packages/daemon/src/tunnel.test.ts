@@ -196,7 +196,12 @@ describe("TunnelManager", () => {
 
   test("resolves with the local socket path once the socket appears and answers a ping", async () => {
     const control = writeControl(tmpDir, "t1", { mode: "listen" });
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
 
     const sock = await mgr.localSocketFor(remoteTarget("workbox", control.path));
 
@@ -213,7 +218,12 @@ describe("TunnelManager", () => {
     fs.writeFileSync(stalePath, "leftover, not a real socket");
     expect(fs.statSync(stalePath).isSocket()).toBe(false);
 
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
     const sock = await mgr.localSocketFor(remoteTarget("workbox", control.path));
 
     expect(sock).toBe(stalePath);
@@ -228,7 +238,12 @@ describe("TunnelManager", () => {
       exitCode: 255,
       stderrText: "Permission denied (publickey).\n",
     });
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
 
     const err = await rejection(mgr.localSocketFor(remoteTarget("workbox", control.path)));
     expect(err.message).toMatch(/Permission denied \(publickey\)/);
@@ -243,7 +258,12 @@ describe("TunnelManager", () => {
       exitCode: 255,
       stderrText: "ssh: connect to host workbox port 22: Connection refused\n",
     });
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
 
     const err = await rejection(mgr.localSocketFor(remoteTarget("workbox", control.path)));
     expect(err.message).toMatch(/Connection refused/);
@@ -263,6 +283,7 @@ describe("TunnelManager", () => {
         "connect to /home/nick/.config/herdr/herdr.sock port 0 failed: Connection refused\n",
     });
     const mgr = new TunnelManager(runDir, {
+      log: () => {},
       sshBin,
       pollIntervalMs: 20,
       pollTimeoutMs: 2000,
@@ -286,7 +307,12 @@ describe("TunnelManager", () => {
       mode: "listen",
       stderrBanner: "debug1: Connecting to workbox port 22\n",
     });
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
 
     await mgr.localSocketFor(remoteTarget("workbox", control.path));
     await waitFor(() => mgr.stderrTail("workbox").length > 0, 2000);
@@ -299,6 +325,7 @@ describe("TunnelManager", () => {
   test("retries with backoff after an established tunnel drops, notifying onStateChange", async () => {
     const control = writeControl(tmpDir, "t4", { mode: "die-after", dieAfterMs: 250 });
     const mgr = new TunnelManager(runDir, {
+      log: () => {},
       sshBin,
       pollIntervalMs: 20,
       pollTimeoutMs: 2000,
@@ -331,7 +358,12 @@ describe("TunnelManager", () => {
 
   test("stop() terminates ssh children and removes their sockets", async () => {
     const control = writeControl(tmpDir, "t5", { mode: "listen" });
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
 
     const sock = await mgr.localSocketFor(remoteTarget("workbox", control.path));
     const pid = readPid(control);
@@ -347,7 +379,12 @@ describe("TunnelManager", () => {
   test("multiple targets get independent sockets named after them", async () => {
     const controlA = writeControl(tmpDir, "a", { mode: "listen" });
     const controlB = writeControl(tmpDir, "b", { mode: "listen" });
-    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+    const mgr = new TunnelManager(runDir, {
+      log: () => {},
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+    });
 
     const [sockA, sockB] = await Promise.all([
       mgr.localSocketFor(remoteTarget("alpha", controlA.path)),
