@@ -144,10 +144,26 @@ remote_socket = "/home/you/.config/herdr/herdr.sock"  # ABSOLUTE path on the rem
 
 The Agent Slot key's context-window donut is populated by
 `AgentInfo.tokens.ctx_pct`, which HerdDeck reads straight from herdr — no
-daemon-side polling is involved. Getting a value in there requires
-chaining `scripts/herddeck-statusline.sh` into Claude Code's statusline
-so it reports `context_window.percentUsed` to herdr on every turn via
-`pane.report_metadata`. Add it to `~/.claude/settings.json`:
+daemon-side polling is involved. Nothing reports that value on its own,
+so a fresh install shows no donut until you wire up one of the two paths
+below. Claude Code hands the context percentage to the statusline
+command on every turn, which makes the statusline the natural reporter.
+
+**Already have a statusline you like? Keep it — add one line.**
+`herddeck-report-ctx` (linked onto `PATH` by `install.sh`) takes a
+percentage and writes it to herdr; that is the whole integration:
+
+```bash
+# in your own statusline script, wherever it already knows the percentage
+herddeck-report-ctx "$PCT" &
+```
+
+Read the percentage from `.context_window.used_percentage` on the
+statusline's stdin JSON. The `&` keeps a hung socket from ever stalling
+your prompt.
+
+**No statusline yet?** Use the bundled delegate, which reports *and*
+renders nothing of its own — add it to `~/.claude/settings.json`:
 
 ```json
 {
@@ -158,14 +174,24 @@ so it reports `context_window.percentUsed` to herdr on every turn via
 }
 ```
 
-If you already have a statusline command, chain it in front instead of
-replacing it — `herddeck-statusline.sh` reads the upstream command's
-rendered text off the `display` field of its own stdin JSON and echoes
-it verbatim, so it never clobbers a richer statusline. The script relies
-on herdr's injected `HERDR_PANE_ID` / `HERDR_SOCKET_PATH` environment
-variables and fails silently (never breaks the prompt) when they're
-absent. Token metadata doesn't survive a herdr server restart, but the
-statusline re-reports every turn, so it self-heals within one turn.
+It also works chained in front of another command: it echoes the
+upstream command's rendered text off the `display` field of its own
+stdin JSON verbatim, so it never clobbers a richer statusline.
+
+Both paths share the same writer and the same guarantees. They rely on
+herdr's injected `HERDR_PANE_ID` / `HERDR_SOCKET_PATH` environment
+variables and fail silently — never breaking the prompt — when those
+are absent, when herdr is stopped, or when the percentage isn't a
+number in `0..100`. herdr's `tokens` map is newest-write-wins across
+sources, so reporting overwrites any stale `ctx_pct` left by an earlier
+reporter; no cleanup is needed. Metadata doesn't survive a herdr server
+restart, but the statusline re-reports every turn, so the donut
+self-heals within one turn.
+
+This is also why the donut is remote-free-of-charge: the statusline runs
+on whichever machine the agent runs on and writes to *that* machine's
+herdr, and the daemon reads it back through the tunnel already
+forwarding that socket.
 
 ### Topology: where each piece runs
 

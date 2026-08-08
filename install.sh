@@ -35,6 +35,10 @@ echo "herddeck: building Stream Deck plugin bundle..."
 BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 ln -sf "$REPO_ROOT/packages/cli/src/herddeck.ts" "$BIN_DIR/herddeck"
+# The context-donut reporter goes on PATH too: an existing statusline
+# feeds the donut by calling it by name, without adopting HerdDeck's
+# own statusline (see README "Context donut").
+ln -sf "$REPO_ROOT/scripts/herddeck-report-ctx.sh" "$BIN_DIR/herddeck-report-ctx"
 if command -v herddeck >/dev/null 2>&1; then
   echo "herddeck: CLI linked at $BIN_DIR/herddeck"
 else
