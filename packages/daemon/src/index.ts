@@ -2,10 +2,12 @@
 // poller, with graceful shutdown. Run directly (`bun src/index.ts`)
 // or under launchd via `herddeck install`.
 
+import { randomBytes } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { claudeAiFetcher } from "./claudeAiFetcher";
 import { loadConfig } from "./config";
 import { focusTerminalApp } from "./focus";
-import { ensureRunDir } from "./paths";
+import { ensureRunDir, tokenPath } from "./paths";
 import { PlanUsagePoller } from "./planUsagePoller";
 import { SessionRegistry } from "./registry";
 import { DeckServer } from "./server";
@@ -31,6 +33,11 @@ const registry = new SessionRegistry(
   tunnels,
 );
 
+// Auth token gating the localhost TCP surface; plugin and CLI read
+// the 0600 file. Regenerated on every daemon start.
+const token = randomBytes(32).toString("hex");
+writeFileSync(tokenPath(), `${token}\n`, { mode: 0o600 });
+
 const server = new DeckServer({
   registry,
   version: VERSION,
@@ -39,6 +46,7 @@ const server = new DeckServer({
     start: () => runTrigger("start"),
     stop: () => runTrigger("stop"),
   },
+  token,
 });
 
 server.start(config.port);

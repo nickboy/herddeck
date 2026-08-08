@@ -146,7 +146,44 @@ kind = "local"
       });
     });
 
-    test("parses remote target with expanded home in host", () => {
+    test("parses remote target with absolute remote_socket", () => {
+      const configPath = path.join(tempDir, "config.toml");
+      fs.writeFileSync(
+        configPath,
+        `[[targets]]
+name = "workbox"
+kind = "remote"
+host = "workbox.example.com"
+remote_socket = "/home/nick/.config/herdr/herdr.sock"
+`,
+      );
+
+      const config = loadConfig(configPath);
+      expect(config.targets).toHaveLength(1);
+      const target = targetAt(config, 0);
+      expect(target.kind).toBe("remote");
+      expect(target.name).toBe("workbox");
+      if (target.kind === "remote") {
+        expect(target.host).toBe("workbox.example.com");
+        expect(target.remoteSocket).toBe("/home/nick/.config/herdr/herdr.sock");
+      }
+    });
+
+    test("throws when remote_socket is missing", () => {
+      const configPath = path.join(tempDir, "config.toml");
+      fs.writeFileSync(
+        configPath,
+        `[[targets]]
+name = "workbox"
+kind = "remote"
+host = "workbox.example.com"
+`,
+      );
+
+      expect(() => loadConfig(configPath)).toThrow(/remote_socket is required/);
+    });
+
+    test("throws when remote_socket uses a tilde (sshd does not expand it)", () => {
       const configPath = path.join(tempDir, "config.toml");
       fs.writeFileSync(
         configPath,
@@ -158,35 +195,7 @@ remote_socket = "~/.config/herdr/herdr.sock"
 `,
       );
 
-      const config = loadConfig(configPath);
-      expect(config.targets).toHaveLength(1);
-      const target = targetAt(config, 0);
-      expect(target.kind).toBe("remote");
-      expect(target.name).toBe("workbox");
-      if (target.kind === "remote") {
-        expect(target.host).toBe("workbox.example.com");
-        // Remote socket should NOT be expanded; kept as-is for remote expansion
-        expect(target.remoteSocket).toBe("~/.config/herdr/herdr.sock");
-      }
-    });
-
-    test("uses default remote_socket for remote target", () => {
-      const configPath = path.join(tempDir, "config.toml");
-      fs.writeFileSync(
-        configPath,
-        `[[targets]]
-name = "workbox"
-kind = "remote"
-host = "workbox.example.com"
-`,
-      );
-
-      const config = loadConfig(configPath);
-      expect(config.targets).toHaveLength(1);
-      const target = targetAt(config, 0);
-      if (target.kind === "remote") {
-        expect(target.remoteSocket).toBe("~/.config/herdr/herdr.sock");
-      }
+      expect(() => loadConfig(configPath)).toThrow(/absolute path/);
     });
 
     test("parses multiple targets", () => {
@@ -201,6 +210,7 @@ kind = "local"
 name = "workbox"
 kind = "remote"
 host = "workbox.example.com"
+remote_socket = "/home/nick/.config/herdr/herdr.sock"
 `,
       );
 

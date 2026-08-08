@@ -1,9 +1,14 @@
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import type { WsCommand, WsEvent } from "./wire";
 
 export type BridgeState = "disconnected" | "connecting" | "connected";
 
 export interface BridgeClientOptions {
+  /** Path to the daemon's 0600 auth-token file; read fresh on every
+   * connect attempt (the daemon regenerates it on restart). Absent or
+   * unreadable file → connect without a token (daemon without auth). */
+  tokenPath?: string;
   url?: string;
   initialBackoffMs?: number;
   maxBackoffMs?: number;
@@ -41,6 +46,7 @@ export class BridgeClient extends EventEmitter {
   state: BridgeState = "disconnected";
 
   private readonly url: string;
+  private readonly tokenPath: string;
   private readonly initialBackoffMs: number;
   private readonly maxBackoffMs: number;
   private readonly WebSocketImpl: SocketCtor;
@@ -56,6 +62,7 @@ export class BridgeClient extends EventEmitter {
   constructor(opts: BridgeClientOptions = {}) {
     super();
     this.url = opts.url ?? "ws://127.0.0.1:9137/ws";
+    this.tokenPath = opts.tokenPath ?? `${process.env.HOME ?? ""}/.herddeck/auth-token`;
     this.initialBackoffMs = opts.initialBackoffMs ?? 500;
     this.maxBackoffMs = opts.maxBackoffMs ?? 30_000;
     this.WebSocketImpl = (opts.WebSocketImpl ??
@@ -63,6 +70,19 @@ export class BridgeClient extends EventEmitter {
     this.setTimeoutFn = opts.setTimeoutImpl ?? setTimeout;
     this.clearTimeoutFn = opts.clearTimeoutImpl ?? clearTimeout;
     this.backoffMs = this.initialBackoffMs;
+  }
+
+  private authedUrl(): string {
+    try {
+      const token = readFileSync(this.tokenPath, "utf8").trim();
+      if (token.length > 0) {
+        const sep = this.url.includes("?") ? "&" : "?";
+        return `${this.url}${sep}token=${encodeURIComponent(token)}`;
+      }
+    } catch {
+      // No token file — daemon may be running without auth.
+    }
+    return this.url;
   }
 
   start(): void {
@@ -107,7 +127,7 @@ export class BridgeClient extends EventEmitter {
 
   private connect(): void {
     this.setState("connecting");
-    const socket = new this.WebSocketImpl(this.url);
+    const socket = new this.WebSocketImpl(this.authedUrl());
     this.socket = socket;
 
     socket.onopen = () => {

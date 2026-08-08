@@ -42,3 +42,9 @@ export function ensureRunDir(): string {
     throw e;
   }
 }
+
+/** Bearer token gating the daemon's localhost TCP surface (ws + health).
+ * Written 0600 by the daemon at startup; plugin and CLI read it. */
+export function tokenPath(): string {
+  return path.join(herddeckDir(), "auth-token");
+}

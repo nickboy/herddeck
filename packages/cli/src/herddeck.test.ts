@@ -159,7 +159,7 @@ kind = "local"
 name = "workbox"
 kind = "remote"
 host = "workbox"
-remote_socket = "~/.config/herdr/herdr.sock"
+remote_socket = "/home/you/.config/herdr/herdr.sock"
 
 [[targets]]
 name = "gpu-box"

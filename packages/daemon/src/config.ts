@@ -210,7 +210,20 @@ export function loadConfig(configFilePath?: string): HerdDeckConfig {
           throw new Error(`targets[] with kind "remote" must have host set`);
         }
 
-        const remoteSocket = (rawTarget.remote_socket as string) || "~/.config/herdr/herdr.sock";
+        // sshd does NOT tilde-expand the remote path of a streamlocal
+        // forward — a "~" here fails silently at channel-open time
+        // while the tunnel itself looks up. Require an absolute path.
+        const remoteSocket = rawTarget.remote_socket as string | undefined;
+        if (!remoteSocket) {
+          throw new Error(
+            `targets[] "${name}": remote_socket is required for remote targets (absolute path on the remote, e.g. /home/you/.config/herdr/herdr.sock)`,
+          );
+        }
+        if (!remoteSocket.startsWith("/")) {
+          throw new Error(
+            `targets[] "${name}": remote_socket must be an absolute path — sshd does not expand "~" in streamlocal forwards (got "${remoteSocket}")`,
+          );
+        }
 
         targets.push({
           name,

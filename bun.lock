@@ -13,6 +13,12 @@
     "packages/cli": {
       "name": "@herddeck/cli",
       "version": "0.0.1",
+      "bin": {
+        "herddeck": "./src/herddeck.ts",
+      },
+      "devDependencies": {
+        "@herddeck/protocol": "workspace:*",
+      },
     },
     "packages/daemon": {
       "name": "@herddeck/daemon",
