@@ -172,6 +172,13 @@ export class SessionRegistry {
     this.tunnels?.stop();
   }
 
+  /** Whether agent:focus on this target should also foreground the
+   * terminal app (config `focus_terminal`, default true). Unknown
+   * targets: false — nothing to bring forward. */
+  focusTerminalFor(target: string): boolean {
+    return this.targets.get(target)?.config.focusTerminal ?? false;
+  }
+
   monitorFor(target: string): TargetMonitor | null {
     return this.targets.get(target)?.monitor ?? null;
   }

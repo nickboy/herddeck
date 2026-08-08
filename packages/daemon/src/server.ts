@@ -117,8 +117,7 @@ export class DeckServer {
         const monitor = registry.monitorFor(cmd.target);
         if (!monitor) return;
         await monitor.call("agent.focus", { target: cmd.paneId });
-        const target = registry.targetSnapshots().find((t) => t.name === cmd.target);
-        if (target?.kind === "local") await this.deps.focusTerminal();
+        if (registry.focusTerminalFor(cmd.target)) await this.deps.focusTerminal();
         return;
       }
       case "agent:answer": {

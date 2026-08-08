@@ -6,6 +6,14 @@ export interface LocalTarget {
   name: string;
   kind: "local";
   socket: string;
+  /** Foreground the terminal app on agent:focus. True by default for
+   * every kind: the daemon runs on the machine with the Stream Deck,
+   * and a REMOTE target's panes are normally watched right here
+   * through a `herdr --remote` client window, so bringing the terminal
+   * forward is just as right as for a local target. Set
+   * `focus_terminal = false` for a target whose panes are displayed on
+   * some other screen. */
+  focusTerminal: boolean;
 }
 
 export interface RemoteTarget {
@@ -13,6 +21,8 @@ export interface RemoteTarget {
   kind: "remote";
   host: string;
   remoteSocket: string;
+  /** See LocalTarget.focusTerminal. */
+  focusTerminal: boolean;
 }
 
 export type TargetConfig = LocalTarget | RemoteTarget;
@@ -163,6 +173,7 @@ export function loadConfig(configFilePath?: string): HerdDeckConfig {
       name: "local",
       kind: "local",
       socket: path.join(home, ".config/herdr/herdr.sock"),
+      focusTerminal: true,
     });
   } else {
     for (const rawTarget of targetsArray) {
@@ -182,6 +193,9 @@ export function loadConfig(configFilePath?: string): HerdDeckConfig {
         throw new Error(`targets[].name "${name}" is duplicated`);
       }
       seenNames.add(name);
+
+      const focusTerminal =
+        typeof rawTarget.focus_terminal === "boolean" ? rawTarget.focus_terminal : true;
 
       if (kind === "local") {
         const session = rawTarget.session as string | undefined;
@@ -203,6 +217,7 @@ export function loadConfig(configFilePath?: string): HerdDeckConfig {
           name,
           kind: "local",
           socket,
+          focusTerminal,
         });
       } else if (kind === "remote") {
         const host = rawTarget.host as string | undefined;
@@ -230,6 +245,7 @@ export function loadConfig(configFilePath?: string): HerdDeckConfig {
           kind: "remote",
           host,
           remoteSocket,
+          focusTerminal,
         });
       } else {
         throw new Error(`targets[].kind must be "local" or "remote", got "${kind}"`);

@@ -53,6 +53,8 @@ function makeMonitor(handlers: Record<string, (params: unknown) => unknown> = {}
 }
 
 interface RegistryStubOpts {
+  /** Targets configured with focus_terminal = false. */
+  noFocusTargets?: string[];
   monitors?: Record<string, StubMonitor>;
   agents?: Record<string, CachedAgent>;
   targets?: TargetSnapshot[];
@@ -70,6 +72,11 @@ function makeRegistry(opts: RegistryStubOpts): SessionRegistry {
     monitorFor: (target: string) => monitors[target] ?? null,
     agentFor: (target: string, paneId: string) => agents[`${target}:${paneId}`] ?? null,
     targetSnapshots: () => targets,
+    // focus_terminal defaults true for every configured target; the
+    // stub mirrors that, with opts.noFocusTargets opting specific ones
+    // out (and unknown targets false, like the real registry).
+    focusTerminalFor: (target: string) =>
+      targets.some((t) => t.name === target) && !(opts.noFocusTargets ?? []).includes(target),
   } as unknown as SessionRegistry;
 }
 
@@ -316,11 +323,32 @@ describe("DeckServer", () => {
       expect(monitor.calls).toEqual([{ method: "agent.focus", params: { target: "p1" } }]);
     });
 
-    test("remote target calls agent.focus but not focusTerminal", async () => {
+    test("remote target also foregrounds the terminal (deck-side viewing is the norm)", async () => {
       const monitor = makeMonitor();
       const registry = makeRegistry({
         monitors: { workbox: monitor },
         targets: [{ name: "workbox", kind: "remote", state: "online", protocol: 19 }],
+      });
+      const { deps, focusCalls } = makeDeps(registry);
+      server = new DeckServer(deps);
+      const p = nextPort();
+      server.start(p);
+      const { ws, received } = await connectClient(p);
+      sockets.push(ws);
+      await waitUntil(() => received.length >= 3);
+
+      ws.send(JSON.stringify({ type: "agent:focus", target: "workbox", paneId: "p1" }));
+      await waitUntil(() => focusCalls.length >= 1);
+
+      expect(monitor.calls).toEqual([{ method: "agent.focus", params: { target: "p1" } }]);
+    });
+
+    test("focus_terminal = false opts a target out of foregrounding", async () => {
+      const monitor = makeMonitor();
+      const registry = makeRegistry({
+        monitors: { workbox: monitor },
+        targets: [{ name: "workbox", kind: "remote", state: "online", protocol: 19 }],
+        noFocusTargets: ["workbox"],
       });
       const { deps, focusCalls } = makeDeps(registry);
       server = new DeckServer(deps);
