@@ -377,7 +377,7 @@ socket = "~/.config/herdr/herdr.sock"
 name = "workbox"
 kind = "remote"
 host = "workbox.example.com"
-remote_socket = "~/.config/herdr/custom.sock"
+remote_socket = "/home/nick/.config/herdr/custom.sock"
 `,
       );
 
@@ -407,7 +407,7 @@ socket = "~/custom/herdr.sock"
       }
     });
 
-    test("does NOT expand ~ in remote socket paths", () => {
+    test("rejects ~ in remote socket paths verbatim (never expands)", () => {
       const configPath = path.join(tempDir, "config.toml");
       fs.writeFileSync(
         configPath,
@@ -419,11 +419,7 @@ remote_socket = "~/custom/herdr.sock"
 `,
       );
 
-      const config = loadConfig(configPath);
-      const target = targetAt(config, 0);
-      if (target.kind === "remote") {
-        expect(target.remoteSocket).toBe("~/custom/herdr.sock");
-      }
+      expect(() => loadConfig(configPath)).toThrow(/absolute path/);
     });
   });
 });
