@@ -1,14 +1,28 @@
 {
   "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "organizeImports": { "enabled": true },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "organizeImports": {
+    "enabled": true
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
   "files": {
     "ignore": [
       "node_modules",
       "dist",
       "packages/protocol/schema.json",
-      "packages/protocol/src/generated.ts"
+      "packages/protocol/src/generated.ts",
+      "packages/plugin/com.nickboy.herddeck.sdPlugin/bin",
+      "packages/plugin/com.nickboy.herddeck.sdPlugin/images"
     ]
   }
 }
