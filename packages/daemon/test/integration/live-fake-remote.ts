@@ -31,7 +31,7 @@ const tunnels = new TunnelManager(runDir);
 const target = {
   name: "fakebox",
   kind: "remote" as const,
-  host: "localhost",
+  host: "fakebox",
   remoteSocket: REMOTE_SOCK,
 };
 
@@ -65,7 +65,7 @@ tunnels.onStateChange((_t, s) => {
   if (s === "down") sawDown = true;
   if (s === "up") sawUp = true;
 });
-execSync("pkill -f 'ssh -N .*fake' || pkill -f 'ssh -N'", { stdio: "ignore" });
+execSync("pkill -f 'fakebox.sock'", { stdio: "ignore" });
 await sleep(4000);
 if (!sawDown) fail("T2: no down event after killing ssh");
 if (!sawUp) fail("T2: no recovery within backoff window");
