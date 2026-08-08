@@ -158,6 +158,25 @@ variables and fails silently (never breaks the prompt) when they're
 absent. Token metadata doesn't survive a herdr server restart, but the
 statusline re-reports every turn, so it self-heals within one turn.
 
+### Topology: where each piece runs
+
+The Stream Deck, the Stream Deck app, and the HerdDeck daemon must all
+be on the **same machine** — the plugin talks to `127.0.0.1:9137`. The
+herdr *servers* can be anywhere; the daemon reaches remote ones over
+SSH. So for a laptop driving a desktop's agents:
+
+```text
+MacBook  ── Stream Deck + plugin + herddeck daemon ──┐
+                                                      │ ssh -N -L (tunnel)
+Mac mini ── herdr server (agents run here) ───────────┘
+```
+
+The laptop needs no local herdr at all — configure only the remote
+target. You typically also watch those panes on the laptop through
+`herdr --remote`, which is why `agent:focus` foregrounds the terminal
+app for remote targets too (`focus_terminal`, default true; set it
+false for a target whose panes you never view locally).
+
 ### Remote targets
 
 Remote targets are reached by forwarding the remote `herdr.sock` over
@@ -212,6 +231,25 @@ auth/host-key/DNS problems before any tunnel is attempted) and, once
 the local tunnel socket exists, a `ping` probe sent through it —
 reporting the remote herdr's version and protocol, or failing with the
 underlying error if nothing (or an error) comes back.
+
+#### Linux remotes
+
+A Linux herdr server works identically — the protocol, the tunnel, and
+the statusline path are OS-independent. Only the paths differ:
+
+- `remote_socket` is that box's absolute path, typically
+  `/home/<user>/.config/herdr/herdr.sock` (herdr honors
+  `XDG_CONFIG_HOME`, so confirm with `herdr status` **on the remote**
+  rather than assuming).
+- Install the same herdr version on both ends. The daemon's tunnel does
+  **not** sync binaries — only a human `herdr --remote` attach does —
+  so a rarely-attached box can drift; a protocol mismatch degrades that
+  target to a warning instead of failing silently, and `herddeck
+  doctor` reports the remote's version per target.
+- Distro sshd configs occasionally set `AllowStreamLocalForwarding no`;
+  if the tunnel establishes but every request fails, that is the first
+  thing to check (the error names the socket path since the daemon
+  drains ssh's stderr).
 
 See the Phase 3 notes in `docs/plans/2026-08-06-master-plan.md` for the
 full verification checklist (network-drop recovery, protocol-mismatch

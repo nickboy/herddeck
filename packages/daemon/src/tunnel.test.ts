@@ -145,7 +145,7 @@ function remoteTarget(
   controlPath: string,
   remoteSocket = "~/.config/herdr/herdr.sock",
 ): TargetConfig & { kind: "remote" } {
-  return { name, kind: "remote", host: controlPath, remoteSocket };
+  return { name, kind: "remote", host: controlPath, remoteSocket, focusTerminal: true };
 }
 
 async function rejection(promise: Promise<unknown>): Promise<TunnelError> {

@@ -83,7 +83,10 @@ session = "name"       # optional named session → ~/.config/herdr/sessions/<na
 name = "workbox"
 kind = "remote"
 host = "workbox"                          # ssh destination (~/.ssh/config applies)
-remote_socket = "/home/you/.config/herdr/herdr.sock"  # ABSOLUTE path on the remote (sshd does not expand ~)
+remote_socket = "/home/you/.config/herdr/herdr.sock"
+focus_terminal = true  # optional, default true — foreground the terminal
+                       # app on agent:focus; set false for a target whose
+                       # panes are never viewed on this machine  # ABSOLUTE path on the remote (sshd does not expand ~)
 
 # Named session on a remote target: no `session` shortcut exists for
 # `kind = "remote"` (see below) — write the full absolute path.

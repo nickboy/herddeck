@@ -39,7 +39,15 @@ function remoteConfig(name = "workbox"): HerdDeckConfig {
     port: 0,
     terminalApp: "Ghostty",
     planUsageEnabled: false,
-    targets: [{ name, kind: "remote", host: "workbox", remoteSocket: "/home/u/herdr.sock" }],
+    targets: [
+      {
+        name,
+        kind: "remote",
+        host: "workbox",
+        remoteSocket: "/home/u/herdr.sock",
+        focusTerminal: true,
+      },
+    ],
   };
 }
 
@@ -172,7 +180,7 @@ describe("SessionRegistry tunnel retry", () => {
       port: 0,
       terminalApp: "Ghostty",
       planUsageEnabled: false,
-      targets: [{ name: "here", kind: "local", socket: DEAD_SOCKET }],
+      targets: [{ name: "here", kind: "local", socket: DEAD_SOCKET, focusTerminal: true }],
     };
     const { events, targets } = collectEvents();
     const registry = new SessionRegistry(config, events);

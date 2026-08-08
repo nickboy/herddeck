@@ -45,6 +45,7 @@ describe("config", () => {
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/herdr.sock"),
+        focusTerminal: true,
       });
     });
 
@@ -104,6 +105,7 @@ socket = "~/.config/herdr/herdr.sock"
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/herdr.sock"),
+        focusTerminal: true,
       });
     });
 
@@ -124,6 +126,7 @@ session = "mysession"
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/sessions/mysession/herdr.sock"),
+        focusTerminal: true,
       });
     });
 
@@ -143,6 +146,7 @@ kind = "local"
         name: "local",
         kind: "local",
         socket: path.join(tempDir, ".config/herdr/herdr.sock"),
+        focusTerminal: true,
       });
     });
 
@@ -421,5 +425,50 @@ remote_socket = "~/custom/herdr.sock"
 
       expect(() => loadConfig(configPath)).toThrow(/absolute path/);
     });
+  });
+});
+
+describe("focus_terminal", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "herddeck-focus-"));
+  });
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("defaults to true for local and remote targets", () => {
+    const p = path.join(dir, "config.toml");
+    fs.writeFileSync(
+      p,
+      `[[targets]]
+name = "local"
+kind = "local"
+
+[[targets]]
+name = "macmini"
+kind = "remote"
+host = "mini.local"
+remote_socket = "/Users/nick/.config/herdr/herdr.sock"
+`,
+    );
+    const config = loadConfig(p);
+    expect(targetAt(config, 0).focusTerminal).toBe(true);
+    expect(targetAt(config, 1).focusTerminal).toBe(true);
+  });
+
+  test("honors an explicit opt-out on a remote target", () => {
+    const p = path.join(dir, "config.toml");
+    fs.writeFileSync(
+      p,
+      `[[targets]]
+name = "headless"
+kind = "remote"
+host = "box"
+remote_socket = "/home/you/.config/herdr/herdr.sock"
+focus_terminal = false
+`,
+    );
+    expect(targetAt(loadConfig(p), 0).focusTerminal).toBe(false);
   });
 });
