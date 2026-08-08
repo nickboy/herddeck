@@ -12,6 +12,7 @@
  * NOTICE.md.
  */
 
+import { logInfo } from "./log";
 import type { PlanMetric, PlanUsageSnapshot } from "./planTypes";
 
 export type HttpFetch = (url: string, init?: RequestInit) => Promise<Response>;
@@ -145,7 +146,7 @@ function logResponseShape(body: unknown): void {
   const fingerprint = keys.join(",");
   if (fingerprint === lastLoggedKeys) return;
   lastLoggedKeys = fingerprint;
-  console.log(`plan response shape: keys=[${fingerprint}]`);
+  logInfo(`plan response shape: keys=[${fingerprint}]`);
 }
 
 export async function loadAccessToken(

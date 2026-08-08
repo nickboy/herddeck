@@ -1,4 +1,5 @@
 import { type spawn as nodeSpawn, spawn } from "node:child_process";
+import { logInfo } from "./log";
 
 /**
  * Wispr Flow's undocumented URL scheme handlers. Declared in the
@@ -65,18 +66,18 @@ export function runTrigger(action: TriggerAction, opts: RunTriggerOptions = {}):
     });
     proc.stdout?.on("data", (chunk) => {
       const msg = chunk.toString().trim();
-      if (msg) console.log(`open: ${msg}`);
+      if (msg) logInfo(`open: ${msg}`);
     });
     proc.stderr?.on("data", (chunk) => {
       const msg = chunk.toString().trim();
-      if (msg) console.log(`open stderr: ${msg}`);
+      if (msg) logInfo(`open stderr: ${msg}`);
     });
     proc.on("error", (err: Error) => {
-      console.log(`open spawn error: ${err.message}`);
+      logInfo(`open spawn error: ${err.message}`);
     });
     proc.unref();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.log(`open spawn failed: ${message}`);
+    logInfo(`open spawn failed: ${message}`);
   }
 }

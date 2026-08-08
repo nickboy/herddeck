@@ -6,6 +6,7 @@
 import type { ServerWebSocket } from "bun";
 import { answerKeys } from "./answerMap";
 import { HerdrApiError } from "./herdr/client";
+import { logDiag } from "./log";
 import type { SessionRegistry } from "./registry";
 import type { AgentSnapshot, TargetSnapshot, WsCommand, WsEvent } from "./wire";
 
@@ -99,14 +100,14 @@ export class DeckServer {
     try {
       cmd = JSON.parse(raw) as WsCommand;
     } catch {
-      console.error(`ws: unparseable command: ${raw.slice(0, 200)}`);
+      logDiag(`ws: unparseable command: ${raw.slice(0, 200)}`);
       return;
     }
     try {
       await this.dispatch(cmd);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`ws-cmd ${cmd.type} failed: ${msg}`);
+      logDiag(`ws-cmd ${cmd.type} failed: ${msg}`);
     }
   }
 
