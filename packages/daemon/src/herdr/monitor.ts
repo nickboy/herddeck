@@ -53,6 +53,8 @@ const LIFECYCLE_SUBS: Subscription[] = [
   { type: "workspace.created" },
   { type: "workspace.renamed" },
   { type: "workspace.closed" },
+  { type: "tab.created" },
+  { type: "tab.renamed" },
   { type: "tab.closed" },
 ];
 

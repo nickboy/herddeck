@@ -21,6 +21,7 @@ export interface AgentSnapshot {
   workspaceLabel: string | null;
   cwd: string | null;
   title: string | null; // terminal_title_stripped
+  tabLabel: string | null; // herdr tab label if set
   ctxPct: number | null; // AgentInfo.tokens.ctx_pct, parsed
   stateChangeSeq: number;
 }

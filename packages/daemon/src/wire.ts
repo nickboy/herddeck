@@ -15,6 +15,7 @@ export interface AgentSnapshot {
   workspaceLabel: string | null;
   cwd: string | null;
   title: string | null;
+  tabLabel: string | null;
   ctxPct: number | null;
   stateChangeSeq: number;
 }

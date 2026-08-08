@@ -15,6 +15,7 @@ const makeAgent = (
   workspaceLabel: null,
   cwd: `/tmp/${paneId}`,
   title: null,
+  tabLabel: null,
   ctxPct: null,
   stateChangeSeq: 1,
   ...overrides,
