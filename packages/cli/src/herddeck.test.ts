@@ -22,6 +22,7 @@ import {
   readRemoteTargetHosts,
   readRemoteTargetNames,
   runCli,
+  runInstall,
   writeLaunchAgentPlist,
 } from "./herddeck";
 
@@ -57,6 +58,8 @@ const captureOutput = () => {
 };
 
 const noopExec: ExecFn = async () => ({ stdout: "", stderr: "", exitCode: 0 });
+/** Install waits for launchd to settle; tests must not pay for it. */
+const noSleep = async () => {};
 const okFetch = (async () => new Response(JSON.stringify({ ok: true }))) as unknown as typeof fetch;
 
 const baseOpts = (override: Partial<CliOptions> = {}): CliOptions => ({
@@ -883,19 +886,26 @@ describe("herddeck install / uninstall", () => {
   test("re-running install boots out the loaded label first (idempotent upgrade path)", async () => {
     const calls: Array<{ cmd: string; args: readonly string[] }> = [];
     // `print` exit 0 ⇒ already bootstrapped; a bare bootstrap would fail
-    // with launchd's "Bootstrap failed: 5: Input/output error".
+    // with launchd's "Bootstrap failed: 5: Input/output error". This
+    // fake unloads promptly, so the settle-wait costs a single poll.
+    let loaded = true;
     const exec: ExecFn = async (cmd, args) => {
       calls.push({ cmd, args });
+      if (args[0] === "print") return { stdout: "", stderr: "", exitCode: loaded ? 0 : 1 };
+      if (args[0] === "bootout") loaded = false;
       return { stdout: "", stderr: "", exitCode: 0 };
     };
     const io = captureOutput();
-    const code = await runCli(["install"], baseOpts({ exec, uid: "501" }), io);
+    const code = await runCli(["install"], baseOpts({ exec, uid: "501", sleep: noSleep }), io);
     expect(code).toBe(0);
 
     const plistPath = join(launchAgentsDir, `${LAUNCHD_LABEL}.plist`);
     expect(calls).toEqual([
       { cmd: "launchctl", args: ["print", `gui/501/${LAUNCHD_LABEL}`] },
       { cmd: "launchctl", args: ["bootout", `gui/501/${LAUNCHD_LABEL}`] },
+      // The unload is confirmed before bootstrapping — see the
+      // bootout/bootstrap race tests below.
+      { cmd: "launchctl", args: ["print", `gui/501/${LAUNCHD_LABEL}`] },
       { cmd: "launchctl", args: ["bootstrap", "gui/501", plistPath] },
     ]);
     expect(io.out).toContain("reloaded");
@@ -904,7 +914,7 @@ describe("herddeck install / uninstall", () => {
   test("install reports failure (nonzero exit) when launchctl bootstrap fails", async () => {
     const exec: ExecFn = async () => ({ stdout: "", stderr: "boom", exitCode: 5 });
     const io = captureOutput();
-    const code = await runCli(["install"], baseOpts({ exec }), io);
+    const code = await runCli(["install"], baseOpts({ exec, sleep: noSleep }), io);
     expect(code).toBe(1);
     expect(io.err).toContain("boom");
   });
@@ -1051,5 +1061,101 @@ describe("plugin-install: Stream Deck process detection", () => {
     // `pgrep -x "Elgato Stream Deck"` never matches — the executable is
     // "Stream Deck" — which silently skipped the relaunch.
     expect(String(pgrep?.args[1])).toContain(".app/Contents/MacOS");
+  });
+});
+
+describe("install: launchd bootout/bootstrap race", () => {
+  /** A fake launchd whose bootout completes asynchronously — `bootout`
+   * returns immediately while `print` keeps reporting the label as
+   * loaded for `unloadDelay` more polls. This is what really happens,
+   * and what left the daemon unloaded in the field. */
+  function fakeLaunchd({ unloadDelay = 0, loaded = true }) {
+    const calls: string[][] = [];
+    let stillLoaded = loaded;
+    let pollsLeft = unloadDelay;
+    const exec: ExecFn = async (cmd, args) => {
+      calls.push([cmd, ...args]);
+      const sub = args[0];
+      if (sub === "print") {
+        if (stillLoaded && pollsLeft > 0) pollsLeft--;
+        else if (stillLoaded && pollsLeft === 0 && calls.some((c) => c[1] === "bootout")) {
+          stillLoaded = false;
+        }
+        return { stdout: "", stderr: "", exitCode: stillLoaded ? 0 : 1 };
+      }
+      if (sub === "bootout") return { stdout: "", stderr: "", exitCode: 0 };
+      if (sub === "bootstrap") {
+        return stillLoaded
+          ? { stdout: "", stderr: "Bootstrap failed: 5: Input/output error", exitCode: 5 }
+          : { stdout: "", stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    return { exec, calls };
+  }
+
+  test("waits out an async bootout instead of leaving nothing loaded", async () => {
+    // Pre-fix: bootstrap ran while the label was still present, failed
+    // with "Bootstrap failed: 5", and the daemon was simply gone.
+    const { exec, calls } = fakeLaunchd({ unloadDelay: 3 });
+    const io = captureOutput();
+    const code = await runInstall(baseOpts({ exec, sleep: noSleep }), io);
+
+    expect(code).toBe(0);
+    expect(io.err).toBe("");
+    expect(io.out).toContain("reloaded");
+    // It polled rather than bootstrapping straight after bootout.
+    const bootoutAt = calls.findIndex((c) => c[1] === "bootout");
+    const bootstrapAt = calls.findIndex((c) => c[1] === "bootstrap");
+    const pollsBetween = calls.slice(bootoutAt, bootstrapAt).filter((c) => c[1] === "print").length;
+    expect(pollsBetween).toBeGreaterThan(1);
+    // Exactly one bootstrap was needed once it waited properly.
+    expect(calls.filter((c) => c[1] === "bootstrap")).toHaveLength(1);
+  });
+
+  test("retries a bootstrap that fails anyway", async () => {
+    // Belt and braces: even if the wait is somehow not enough, the
+    // install must not hand back a dead service.
+    let bootstraps = 0;
+    const exec: ExecFn = async (cmd, args) => {
+      const sub = args[0];
+      if (sub === "print") return { stdout: "", stderr: "", exitCode: 1 }; // never loaded
+      if (sub === "bootstrap") {
+        bootstraps++;
+        return bootstraps === 1
+          ? { stdout: "", stderr: "Bootstrap failed: 5: Input/output error", exitCode: 5 }
+          : { stdout: "", stderr: "", exitCode: 0 };
+      }
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const io = captureOutput();
+    const code = await runInstall(baseOpts({ exec, sleep: noSleep }), io);
+
+    expect(code).toBe(0);
+    expect(bootstraps).toBe(2);
+    expect(io.err).toBe("");
+    expect(io.out).toContain("bootstrapped");
+  });
+
+  test("a genuinely broken launchd still reports the error", async () => {
+    const exec: ExecFn = async (cmd, args) => {
+      const sub = args[0];
+      if (sub === "print") return { stdout: "", stderr: "", exitCode: 1 };
+      if (sub === "bootstrap")
+        return { stdout: "", stderr: "Load failed: 5: Input/output error", exitCode: 5 };
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const io = captureOutput();
+    await runInstall(baseOpts({ exec, sleep: noSleep }), io);
+    expect(io.err).toContain("launchctl bootstrap exited 5");
+  });
+
+  test("skips bootout entirely on a first install", async () => {
+    const { exec, calls } = fakeLaunchd({ loaded: false });
+    const io = captureOutput();
+    const code = await runInstall(baseOpts({ exec, sleep: noSleep }), io);
+    expect(code).toBe(0);
+    expect(calls.some((c) => c[1] === "bootout")).toBe(false);
+    expect(io.out).toContain("bootstrapped");
   });
 });

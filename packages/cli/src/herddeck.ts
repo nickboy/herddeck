@@ -64,6 +64,9 @@ export interface CliOptions {
   uid: string;
   fetchImpl: FetchLike;
   exec: ExecFn;
+  /** Injectable delay so install's launchd settle-wait costs tests
+   * nothing. Defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_PORT = 9137;
@@ -75,6 +78,14 @@ const DEFAULT_PORT = 9137;
 export const EXPECTED_PROTOCOL = 19;
 
 export const LAUNCHD_LABEL = "com.nickboy.herddeck.daemon";
+
+/** Poll interval and cap while waiting for `launchctl bootout` to
+ * actually finish, plus how many times to retry a bootstrap that fails
+ * anyway. 20 x 100ms is far beyond the observed settle time and still
+ * bounded at 2s. */
+const UNLOAD_WAIT_MS = 100;
+const UNLOAD_WAIT_ATTEMPTS = 20;
+const BOOTSTRAP_RETRIES = 2;
 
 // ---------------------------------------------------------------------------
 // Defaults
@@ -839,16 +850,34 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
 
   // Re-running install is the documented upgrade path, but launchd
   // refuses to bootstrap an already-loaded label ("Bootstrap failed: 5:
-  // Input/output error"). Boot it out first — ignoring the failure when
-  // it wasn't loaded — so install is idempotent, then kickstart so the
-  // restarted process picks up newly pulled code.
-  const alreadyLoaded =
+  // Input/output error"), so it has to be booted out first.
+  //
+  // The trap: `bootout` returns BEFORE launchd has finished unloading
+  // the job. Bootstrapping immediately then fails on the still-present
+  // label and — because the bootout did eventually complete — leaves
+  // NOTHING loaded. Observed live: install reported a bootstrap error
+  // and the daemon was simply gone until install was run a second time.
+  //
+  // So: wait for the label to actually disappear, and retry a bootstrap
+  // that fails anyway. Both are bounded; a genuinely broken launchd
+  // still surfaces its error rather than hanging.
+  const sleep = opts.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const isLoaded = async (): Promise<boolean> =>
     (await opts.exec("launchctl", ["print", `gui/${opts.uid}/${LAUNCHD_LABEL}`])).exitCode === 0;
+
+  const alreadyLoaded = await isLoaded();
   if (alreadyLoaded) {
     await opts.exec("launchctl", ["bootout", `gui/${opts.uid}/${LAUNCHD_LABEL}`]);
+    for (let i = 0; i < UNLOAD_WAIT_ATTEMPTS && (await isLoaded()); i++) {
+      await sleep(UNLOAD_WAIT_MS);
+    }
   }
 
-  const res = await opts.exec("launchctl", ["bootstrap", `gui/${opts.uid}`, plistPath]);
+  let res = await opts.exec("launchctl", ["bootstrap", `gui/${opts.uid}`, plistPath]);
+  for (let i = 0; i < BOOTSTRAP_RETRIES && res.exitCode !== 0; i++) {
+    await sleep(UNLOAD_WAIT_MS);
+    res = await opts.exec("launchctl", ["bootstrap", `gui/${opts.uid}`, plistPath]);
+  }
   if (res.exitCode !== 0) {
     io.stderr(
       `launchctl bootstrap exited ${res.exitCode}${res.stderr.trim() ? `: ${res.stderr.trim()}` : ""}\n`,
