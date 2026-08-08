@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentSnapshot, AgentStatus } from "../wire";
-import { EMPTY_SLOT_BG, STATUS_COLOURS, renderAgentSlot, renderAgentSlotImage } from "./agentSlot";
+import {
+  EMPTY_SLOT_BG,
+  STATUS_COLOURS,
+  distinguishingName,
+  renderAgentSlot,
+  renderAgentSlotImage,
+} from "./agentSlot";
 
 const makeAgent = (overrides: Partial<AgentSnapshot> = {}): AgentSnapshot => ({
   target: "local",
@@ -317,5 +323,72 @@ describe("renderAgentSlot — live terminal title", () => {
   test("an explicit agent name still wins", () => {
     const r = renderAgentSlot(makeAgent({ name: "alpha", title: "herdr-limit" }), false, false);
     expect(r.displayName).toContain("alpha");
+  });
+});
+
+describe("renderAgentSlot — distinguishing tail for project/branch session names", () => {
+  test("shows the branch tail, not a left-anchored 'home/fix/s' truncation", () => {
+    const r = renderAgentSlot(makeAgent({ title: "home/fix/ssh-sockets" }), false, false);
+    expect(r.displayName).toBe("ssh-socket");
+    expect(r.displayName).not.toBe("home/fix/s");
+  });
+
+  test("a name with no slash is unaffected", () => {
+    const r = renderAgentSlot(makeAgent({ tabLabel: "home" }), false, false);
+    expect(r.displayName).toBe("home");
+  });
+
+  test("a single segment longer than the budget truncates as before", () => {
+    const r = renderAgentSlot(makeAgent({ cwd: "/tmp/this-is-a-very-long-dirname" }), false, false);
+    expect(r.displayName).toBe("this-is-a-");
+  });
+
+  test("two sessions on the same project but different branches render different displayNames", () => {
+    const a = renderAgentSlot(makeAgent({ title: "home/fix/a" }), false, false);
+    const b = renderAgentSlot(makeAgent({ title: "home/fix/b" }), false, false);
+    expect(a.displayName).not.toBe(b.displayName);
+    expect(a.displayName).toBe("home/fix/a");
+    expect(b.displayName).toBe("home/fix/b");
+  });
+});
+
+describe("distinguishingName — exported helper", () => {
+  test("no slash: identical to plain truncation", () => {
+    expect(distinguishingName("home", 10)).toBe("home");
+    expect(distinguishingName("this-is-a-very-long-dirname", 10)).toBe("this-is-a-");
+  });
+
+  test("last segment exceeds budget: falls back to truncating just the tail", () => {
+    expect(distinguishingName("home/fix/ssh-sockets", 10)).toBe("ssh-socket");
+  });
+
+  test("last segment fits exactly at the budget boundary: kept whole, no earlier segment squeezed in", () => {
+    expect(distinguishingName("home/fix/ssh-sockets", 11)).toBe("ssh-sockets");
+  });
+
+  test("joined form fits exactly at the budget boundary: earlier segment included", () => {
+    expect(distinguishingName("fix/ssh-sockets", 15)).toBe("fix/ssh-sockets");
+  });
+
+  test("joined form one char over budget: earlier segment excluded", () => {
+    expect(distinguishingName("fix/ssh-sockets", 14)).toBe("ssh-sockets");
+  });
+
+  test("grows leftward while segments fit, stops at the first that doesn't", () => {
+    // "home/fix/ssh-sockets" is 20 chars; "fix/ssh-sockets" is 15.
+    expect(distinguishingName("home/fix/ssh-sockets", 15)).toBe("fix/ssh-sockets");
+    expect(distinguishingName("home/fix/ssh-sockets", 20)).toBe("home/fix/ssh-sockets");
+  });
+
+  test("empty trailing segments (trailing slash) are dropped before measuring", () => {
+    expect(distinguishingName("home/fix/branch/", 6)).toBe("branch");
+  });
+
+  test("all-slash input with no real segments falls back to plain truncation", () => {
+    expect(distinguishingName("///", 5)).toBe("///");
+  });
+
+  test("zero budget with an over-budget last segment falls back to empty truncation", () => {
+    expect(distinguishingName("a/b", 0)).toBe("");
   });
 });

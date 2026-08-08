@@ -95,7 +95,7 @@ export function renderAgentSlot(
     agent.workspaceLabel ||
     basename(agent.cwd ?? "") ||
     "";
-  const truncated = truncate(base, charBudget);
+  const truncated = distinguishingName(base, charBudget);
   const displayName = focused ? `▸ ${truncated}` : truncated;
 
   return {
@@ -123,6 +123,45 @@ function basename(p: string): string {
 
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max);
+}
+
+/**
+ * Truncate a display name to fit `budget`, but when it contains "/"
+ * keep the trailing (distinguishing) segments rather than the head.
+ *
+ * WHY the tail wins: the user's dotfiles default Claude session names
+ * to `project/branch` (e.g. "home/fix/ssh-sockets"). Across a busy
+ * deck, the project prefix repeats on every slot for that project —
+ * it carries no information once you have more than one agent working
+ * in it. The branch is what actually differs between two slots, so a
+ * left-anchored truncation that keeps the head and cuts the tail
+ * throws away exactly the part the user needs to tell keys apart.
+ */
+export function distinguishingName(raw: string, budget: number): string {
+  if (!raw.includes("/")) return truncate(raw, budget);
+
+  const segments = raw.split("/").filter((s) => s.length > 0);
+  if (segments.length === 0) return truncate(raw, budget);
+
+  const last = segments[segments.length - 1] as string;
+  if (last.length > budget) {
+    // Even the single most-distinguishing segment doesn't fit —
+    // fall back to the same left-anchored truncation we'd apply to a
+    // slash-free name, just applied to the tail segment instead of
+    // the whole string.
+    return truncate(last, budget);
+  }
+
+  // Grow leftward from the last segment, keeping the joined form as
+  // long as it still fits the budget, so we surface as many
+  // distinguishing trailing segments as there's room for.
+  let result = last;
+  for (let i = segments.length - 2; i >= 0; i--) {
+    const candidate = `${segments[i]}/${result}`;
+    if (candidate.length > budget) break;
+    result = candidate;
+  }
+  return result;
 }
 
 /**
