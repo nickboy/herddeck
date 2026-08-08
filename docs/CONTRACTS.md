@@ -84,10 +84,29 @@ name = "workbox"
 kind = "remote"
 host = "workbox"                          # ssh destination (~/.ssh/config applies)
 remote_socket = "/home/you/.config/herdr/herdr.sock"  # ABSOLUTE path on the remote (sshd does not expand ~)
+
+# Named session on a remote target: no `session` shortcut exists for
+# `kind = "remote"` (see below) — write the full absolute path.
+[[targets]]
+name = "workbox-review"
+kind = "remote"
+host = "workbox"
+remote_socket = "/home/you/.config/herdr/sessions/review/herdr.sock"
 ```
 
 Missing file ⇒ default single local target. Parse errors are fatal
 with a clear message. `TargetConfig` discriminated union on `kind`.
+
+Remote named sessions (R6): `remote_socket` for a named session is the
+absolute `/home/you/.config/herdr/sessions/<name>/herdr.sock` — the
+same layout `session = "name"` expands to locally, just not expandable
+remotely. The session must have been started at least once on the
+remote host or that path won't exist yet (tunnel binds locally
+regardless; `doctor`'s ping probe / the daemon's connect attempt is
+what surfaces the absent remote socket). A composing `session` field
+for `kind = "remote"` targets is deliberately impossible — the daemon
+has no way to learn `$HOME` on the remote machine, so it cannot expand
+a bare name into a path there — and must not be added.
 
 ### HerdrClient transport (herdr/client.ts)
 
@@ -196,7 +215,10 @@ working=#f9e2af done=#a6e3a1 idle=#6c7086 offline=#45475a
 
 `herddeck` bin: `status` (connect WS, print targets+agents table),
 `doctor` (socket exists+perms, `herdr status` parse, protocol match,
-port free/daemon health, launchd loaded, tunnel state), `install` /
+port free/daemon health, launchd loaded, and per remote target a
+`ssh -o BatchMode=yes <host> true` reachability pre-check plus a
+`ping` probe through the tunnel socket rather than trusting its mere
+existence — R4), `install` /
 `uninstall` (launchd plist ~/Library/LaunchAgents/com.nickboy.herddeck.daemon.plist
 running `bun <repo>/packages/daemon/src/index.ts`; no .app bundle, no
 Accessibility — that whole claudedeck complexity is obsolete).
