@@ -21,9 +21,20 @@ import {
   type Subscription,
 } from "@herddeck/protocol";
 import { type CachedAgent, StateCache } from "../stateCache.ts";
-import { HerdrClient, type StreamHandle } from "./client.ts";
+import { HerdrApiError, HerdrClient, type StreamHandle } from "./client.ts";
 
 export type TargetState = "connecting" | "online" | "offline" | "protocol-mismatch";
+
+/** Bound on per-open prune retries, so a pathological server can't spin
+ * this loop forever. */
+const MAX_STALE_PANE_PRUNES = 8;
+
+/** herdr reports a bad subscription as `pane <id> not found`; pull the
+ * id back out so we can drop exactly that pane. */
+function stalePaneId(err: unknown): string | null {
+  if (!(err instanceof HerdrApiError) || err.code !== "pane_not_found") return null;
+  return /pane (\S+) not found/.exec(err.message)?.[1] ?? null;
+}
 
 export interface TargetMonitorEvents {
   status(state: TargetState, protocol: number | null): void;
@@ -219,28 +230,46 @@ export class TargetMonitor {
 
   /** Open the per-pane status stream for the current pane set. */
   private async openPaneStream(gen: number): Promise<void> {
-    const paneIds = this.cache.paneIds();
-    this.paneStreamKey = paneIds.join(",");
-    if (paneIds.length === 0) {
-      this.paneStream = null;
-      return;
+    // herdr fails an entire subscribe batch when ONE pane_id is stale,
+    // and short-lived panes (popups, plugin panes) routinely vanish
+    // between their pane_created event and our resubscribe. Tearing the
+    // connection down for that would rebuild the identical doomed batch
+    // on reconnect — an endless online/connecting flap, observed live on
+    // a busy session. Prune the vanished pane and retry instead.
+    for (let attempt = 0; attempt <= MAX_STALE_PANE_PRUNES; attempt++) {
+      const paneIds = this.cache.paneIds();
+      this.paneStreamKey = paneIds.join(",");
+      if (paneIds.length === 0) {
+        this.paneStream = null;
+        return;
+      }
+      const subs: Subscription[] = paneIds.map((id) => ({
+        type: "pane.agent_status_changed",
+        pane_id: id,
+      }));
+      try {
+        const stream = await this.client.openStream(subs, {
+          onEvent: (e) => {
+            if (gen !== this.generation) return;
+            if (this.cache.applyEvent(e)) this.scheduleAgentsChanged();
+          },
+          onClose: () => this.handleStreamDrop(gen),
+        });
+        if (gen !== this.generation) {
+          stream.close();
+          return;
+        }
+        this.paneStream = stream;
+        return;
+      } catch (err) {
+        const stale = stalePaneId(err);
+        if (stale === null || gen !== this.generation) throw err;
+        if (this.cache.removePane(stale)) this.scheduleAgentsChanged();
+      }
     }
-    const subs: Subscription[] = paneIds.map((id) => ({
-      type: "pane.agent_status_changed",
-      pane_id: id,
-    }));
-    const stream = await this.client.openStream(subs, {
-      onEvent: (e) => {
-        if (gen !== this.generation) return;
-        if (this.cache.applyEvent(e)) this.scheduleAgentsChanged();
-      },
-      onClose: () => this.handleStreamDrop(gen),
-    });
-    if (gen !== this.generation) {
-      stream.close();
-      return;
-    }
-    this.paneStream = stream;
+    throw new Error(
+      `pane subscription still failing after pruning ${MAX_STALE_PANE_PRUNES} stale panes`,
+    );
   }
 
   /**
