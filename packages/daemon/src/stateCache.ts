@@ -355,6 +355,12 @@ export class StateCache {
     return out;
   }
 
+  /** Forget a pane the server says no longer exists (a subscribe
+   * rejected it). Returns true when something was removed. */
+  removePane(paneId: string): boolean {
+    return this.panes.delete(paneId);
+  }
+
   /** All live pane ids (sorted for a deterministic subscription set). */
   paneIds(): string[] {
     return [...this.panes.keys()].sort();

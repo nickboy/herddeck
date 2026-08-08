@@ -255,3 +255,33 @@ describe("TargetMonitor", () => {
     await rec.waitAgents((a) => a[0]?.status === "done");
   });
 });
+
+describe("stale pane subscriptions", () => {
+  test("prunes a vanished pane instead of reconnect-flapping", async () => {
+    seedMockSession();
+    // A second pane the server no longer knows: every batch naming it
+    // fails whole (herdr's all-or-nothing subscribe).
+    mock.snapshot.panes.push({
+      pane_id: "p2",
+      workspace_id: "ws-1",
+      tab_id: "tab-1",
+      agent_status: "idle",
+      revision: 1,
+      focused: false,
+    });
+    mock.rejectPaneIds.add("p2");
+    await mock.listen();
+
+    const rec = makeRecorder();
+    monitor = new TargetMonitor("local", sockPath, rec.events, { backoffMs: [10, 100] });
+    monitor.start();
+    await rec.waitStatus((s) => s.state === "online");
+    await new Promise((r) => setTimeout(r, 250));
+
+    // Pre-fix: an endless online→connecting loop, because every
+    // reconnect rebuilt the same doomed batch.
+    expect(rec.statuses.filter((s) => s.state === "connecting").length).toBe(1);
+    expect(rec.statuses[rec.statuses.length - 1]?.state).toBe("online");
+    expect(monitor.cache.paneIds()).toEqual(["p1"]);
+  });
+});

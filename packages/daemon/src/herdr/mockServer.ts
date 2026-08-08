@@ -94,6 +94,12 @@ export class MockHerdr {
   /** Non-null ⇒ events.subscribe fails pre-ACK with this error. */
   failSubscribe: { code: string; message: string } | null = null;
   /**
+   * Pane ids the server no longer knows: a subscribe batch mentioning
+   * any of them fails whole (herdr's all-or-nothing behavior for one
+   * stale pane — the live cause of the reconnect flap).
+   */
+  rejectPaneIds = new Set<string>();
+  /**
    * Non-null ⇒ command replies carry this id instead of the request's
    * (herdr answers malformed requests with id "" — correlation must be
    * "the single in-flight request", not id equality).
@@ -199,6 +205,20 @@ export class MockHerdr {
         return;
       }
       const subs = (req.params.subscriptions as Array<Record<string, unknown>>) ?? [];
+      const staleIdx = subs.findIndex(
+        (sub) => typeof sub.pane_id === "string" && this.rejectPaneIds.has(sub.pane_id),
+      );
+      if (staleIdx >= 0) {
+        reply({
+          id: `${req.id}:sub:${staleIdx}:probe`,
+          error: {
+            code: "pane_not_found",
+            message: `pane ${subs[staleIdx]?.pane_id} not found`,
+          },
+        });
+        sock.end();
+        return;
+      }
       const stream = new MockStream(subs, sock);
       this.streams.push(stream);
       reply({ id: req.id, result: { type: "subscription_started" } });
