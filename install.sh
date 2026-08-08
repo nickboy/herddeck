@@ -22,6 +22,12 @@ bun install --frozen-lockfile --cwd "$REPO_ROOT"
 echo "herddeck: running test suite..."
 (cd "$REPO_ROOT" && bun test)
 
+# The .sdPlugin bundle ships only manifest + profile in git; its bin/
+# and images/ are generated, so linking an unbuilt bundle gives Stream
+# Deck a plugin with no code path.
+echo "herddeck: building Stream Deck plugin bundle..."
+(cd "$REPO_ROOT/packages/plugin" && bun run build)
+
 echo "herddeck: bootstrapping daemon LaunchAgent..."
 bun "$REPO_ROOT/packages/cli/src/herddeck.ts" install "$@"
 

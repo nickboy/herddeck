@@ -1,0 +1,28 @@
+# gitleaks config for HerdDeck.
+#
+# The daemon deals in credentials by design (Keychain-sourced OAuth for
+# plan usage, a generated 0600 WS auth token) but never stores them in
+# the repo; these allowlists keep that vocabulary from tripping the
+# scanner while leaving real secret patterns fully armed.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "herddeck-auth-token-file"
+description = "Anything resembling a committed herddeck auth token"
+regex = '''(?i)herddeck[_-]?(auth[_-]?)?token\s*[:=]\s*["'][0-9a-f]{32,}["']'''
+tags = ["herddeck", "token"]
+
+[allowlist]
+description = "Documentation and fixtures that name credentials without containing them"
+paths = [
+  '''docs/plans/.*\.md''',
+  '''packages/protocol/schema.json''',
+]
+regexes = [
+  # Test fixtures use obvious dummy values.
+  '''(tok123|sekret|test-token|nonexistent/herddeck-test-token)''',
+  # The 1Password agent socket path is a path, not a secret.
+  '''2BUA8C4S2C\.com\.1password''',
+]

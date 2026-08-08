@@ -36,6 +36,30 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun test
 
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history — scan every commit, not just the tip
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      # The Stream Deck bundle's bin/ + images/ are generated; this job
+      # keeps them buildable (a broken build is invisible to tests).
+      - run: bun run --cwd packages/plugin build
+      - run: test -s packages/plugin/com.nickboy.herddeck.sdPlugin/bin/plugin.js
+      - run: bun packages/plugin/scripts/generateProfile.ts
+
   shellcheck:
     runs-on: ubuntu-latest
     steps:
