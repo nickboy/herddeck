@@ -59,6 +59,11 @@ export class TunnelError extends Error {
 }
 
 export interface TunnelManagerOptions {
+  /** Where failure diagnostics go. Defaults to console.error; tests
+   * inject a sink so deliberately-failing cases don't print scary
+   * (but expected) lines during `bun test` — which install.sh runs,
+   * where they read as a broken install. */
+  log?: (message: string) => void;
   /** ssh binary/path to spawn. Defaults to "ssh"; tests inject a fake. */
   sshBin?: string;
   /** Poll interval while waiting for the local socket to appear (ms). Default 200. */
@@ -120,6 +125,7 @@ export class TunnelManager implements TunnelProvider {
   private readonly handles = new Map<string, TunnelHandle>();
   private readonly listeners = new Set<TunnelStateListener>();
   private readonly sshBin: string;
+  private readonly log: (message: string) => void;
   private readonly pollIntervalMs: number;
   private readonly pollTimeoutMs: number;
   private readonly probeTimeoutMs: number;
@@ -131,6 +137,7 @@ export class TunnelManager implements TunnelProvider {
     opts: TunnelManagerOptions = {},
   ) {
     this.sshBin = opts.sshBin ?? "ssh";
+    this.log = opts.log ?? ((m) => console.error(m));
     this.pollIntervalMs = opts.pollIntervalMs ?? 200;
     this.pollTimeoutMs = opts.pollTimeoutMs ?? 10_000;
     this.probeTimeoutMs = opts.probeTimeoutMs ?? 4_000;
@@ -353,7 +360,7 @@ export class TunnelManager implements TunnelProvider {
   }
 
   private logFailure(handle: TunnelHandle, args: string[], message: string): void {
-    console.error(
+    this.log(
       `herddeck: tunnel ${handle.target.name} failed to establish (${this.sshBin} ${args.join(" ")}): ${message}`,
     );
   }

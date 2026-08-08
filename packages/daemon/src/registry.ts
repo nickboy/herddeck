@@ -36,6 +36,9 @@ export interface RegistryOptions {
   tunnelRetryBaseMs?: number;
   /** First-attempt tunnel retry backoff ceiling (ms). Default 600_000. */
   tunnelRetryMaxMs?: number;
+  /** Where failure diagnostics go; tests inject a sink (see
+   * TunnelManagerOptions.log for why). Defaults to console.error. */
+  log?: (message: string) => void;
 }
 
 const STATUS_ORDER: Record<SlotStatus, number> = {
@@ -62,6 +65,7 @@ interface TargetRuntime {
 
 export class SessionRegistry {
   private targets = new Map<string, TargetRuntime>();
+  private readonly log: (message: string) => void;
   private stopped = false;
   private readonly tunnelRetryBaseMs: number;
   private readonly tunnelRetryMaxMs: number;
@@ -74,6 +78,7 @@ export class SessionRegistry {
   ) {
     this.tunnelRetryBaseMs = opts.tunnelRetryBaseMs ?? 15_000;
     this.tunnelRetryMaxMs = opts.tunnelRetryMaxMs ?? 600_000;
+    this.log = opts.log ?? ((m) => console.error(m));
   }
 
   start(): void {
@@ -125,7 +130,7 @@ export class SessionRegistry {
     const message = err instanceof Error ? err.message : String(err);
     if (!rt.failureLogged) {
       rt.failureLogged = true;
-      console.error(
+      this.log(
         `target ${t.name}: tunnel failed: ${message}${transient ? " (will retry)" : " (not retrying — fix config/auth and restart)"}`,
       );
     }

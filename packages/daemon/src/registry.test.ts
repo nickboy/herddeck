@@ -93,6 +93,7 @@ describe("SessionRegistry tunnel retry", () => {
     const stub = new StubTunnels([new TunnelError("tunnel workbox: timed out", true), DEAD_SOCKET]);
     const { events, targets } = collectEvents();
     const registry = new SessionRegistry(remoteConfig(), events, stub, {
+      log: () => {},
       tunnelRetryBaseMs: 20,
       tunnelRetryMaxMs: 100,
     });
@@ -119,6 +120,7 @@ describe("SessionRegistry tunnel retry", () => {
     ]);
     const { events, targets } = collectEvents();
     const registry = new SessionRegistry(remoteConfig(), events, stub, {
+      log: () => {},
       tunnelRetryBaseMs: 10,
       tunnelRetryMaxMs: 50,
     });
@@ -143,6 +145,7 @@ describe("SessionRegistry tunnel retry", () => {
     };
     const { events, targets } = collectEvents();
     const registry = new SessionRegistry(remoteConfig(), events, stub, {
+      log: () => {},
       tunnelRetryBaseMs: 10,
       tunnelRetryMaxMs: 50,
     });
@@ -159,6 +162,7 @@ describe("SessionRegistry tunnel retry", () => {
     const stub = new StubTunnels([new TunnelError("tunnel workbox: refused", true)]);
     const { events, targets } = collectEvents();
     const registry = new SessionRegistry(remoteConfig(), events, stub, {
+      log: () => {},
       tunnelRetryBaseMs: 50,
       tunnelRetryMaxMs: 200,
     });
