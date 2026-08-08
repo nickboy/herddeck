@@ -3,19 +3,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { TargetConfig } from "./config";
-import { TunnelManager } from "./tunnel";
+import { TunnelError, TunnelManager } from "./tunnel";
 
 // Fake ssh: a tiny Bun script written to disk per test run. It never
 // touches a real remote host — it parses the same `-L local:remote`
 // argv that TunnelManager builds, and (depending on a JSON "control
 // file" whose path is smuggled through in the `host` argv slot)
-// either binds a real unix socket at `local` and idles, or fails
-// immediately with a chosen exit code/stderr, or binds then dies
-// after a delay to simulate a dropped tunnel. It does NOT unlink a
-// pre-existing file at `local` itself — that's TunnelManager's job
-// (step 1 of establish); if TunnelManager skipped it, Bun.listen()
-// binding on top of a stale plain file throws and the fake exits
-// non-zero, which is what the "stale socket" test relies on.
+// either binds a real unix socket at `local` and serves pong replies,
+// or fails immediately with a chosen exit code/stderr, or binds then
+// dies after a delay to simulate a dropped tunnel. Establish now ends
+// with a ping probe THROUGH the socket, so the default "listen" mode
+// answers any request line with a canned pong; "listen-mute" binds
+// but never answers (simulating ssh bound locally with the remote
+// side dead) and can emit control.stderrOnConnect to stderr when a
+// client connects, mimicking ssh's async
+// `connect to <path> port 0 failed` line. control.stderrBanner is
+// written to stderr right after binding (exercises the lifetime
+// stderr drain). It does NOT unlink a pre-existing file at `local`
+// itself — that's TunnelManager's job (step 1 of establish); if
+// TunnelManager skipped it, Bun.listen() binding on top of a stale
+// plain file throws and the fake exits non-zero, which is what the
+// "stale socket" test relies on.
 const MOCK_SSH_SOURCE = `#!/usr/bin/env bun
 import fs from "node:fs";
 
@@ -50,14 +58,27 @@ if (!localSock) {
   process.exit(1);
 }
 
+const pong = \`\${JSON.stringify({
+  id: "",
+  result: { type: "pong", version: "test", protocol: 19, capabilities: {} },
+})}\\n\`;
+
 const server = Bun.listen({
   unix: localSock,
   socket: {
-    open() {},
-    data() {},
+    open() {
+      if (mode === "listen-mute" && control.stderrOnConnect) {
+        process.stderr.write(control.stderrOnConnect);
+      }
+    },
+    data(socket) {
+      if (mode !== "listen-mute") socket.write(pong);
+    },
     close() {},
   },
 });
+
+if (control.stderrBanner) process.stderr.write(control.stderrBanner);
 
 let shuttingDown = false;
 function shutdown(code) {
@@ -127,6 +148,17 @@ function remoteTarget(
   return { name, kind: "remote", host: controlPath, remoteSocket };
 }
 
+async function rejection(promise: Promise<unknown>): Promise<TunnelError> {
+  let err: unknown;
+  try {
+    await promise;
+  } catch (e) {
+    err = e;
+  }
+  expect(err).toBeInstanceOf(TunnelError);
+  return err as TunnelError;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -162,7 +194,7 @@ describe("TunnelManager", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  test("resolves with the local socket path once the tunnel's socket appears", async () => {
+  test("resolves with the local socket path once the socket appears and answers a ping", async () => {
     const control = writeControl(tmpDir, "t1", { mode: "listen" });
     const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
 
@@ -190,7 +222,7 @@ describe("TunnelManager", () => {
     mgr.stop();
   });
 
-  test("rejects with the fake ssh's stderr when it exits before the socket appears", async () => {
+  test("rejects non-transient when ssh exits with 'Permission denied'", async () => {
     const control = writeControl(tmpDir, "t3", {
       mode: "fail",
       exitCode: 255,
@@ -198,15 +230,74 @@ describe("TunnelManager", () => {
     });
     const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
 
-    await expect(mgr.localSocketFor(remoteTarget("workbox", control.path))).rejects.toThrow(
-      /Permission denied \(publickey\)/,
-    );
+    const err = await rejection(mgr.localSocketFor(remoteTarget("workbox", control.path)));
+    expect(err.message).toMatch(/Permission denied \(publickey\)/);
+    expect(err.transient).toBe(false);
+
+    mgr.stop();
+  });
+
+  test("rejects transient when ssh exits with 'Connection refused'", async () => {
+    const control = writeControl(tmpDir, "t3b", {
+      mode: "fail",
+      exitCode: 255,
+      stderrText: "ssh: connect to host workbox port 22: Connection refused\n",
+    });
+    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+
+    const err = await rejection(mgr.localSocketFor(remoteTarget("workbox", control.path)));
+    expect(err.message).toMatch(/Connection refused/);
+    expect(err.transient).toBe(true);
+
+    mgr.stop();
+  });
+
+  // R2: the socket file existing is NOT "established" — ssh binds
+  // locally before any channel reaches the remote. A bound socket
+  // with nothing answering behind it must fail the establish (probe),
+  // classified transient, with ssh's async stderr line in the message.
+  test("probe: bound socket with a dead far side fails transient with the stderr tail", async () => {
+    const control = writeControl(tmpDir, "t6", {
+      mode: "listen-mute",
+      stderrOnConnect:
+        "connect to /home/nick/.config/herdr/herdr.sock port 0 failed: Connection refused\n",
+    });
+    const mgr = new TunnelManager(runDir, {
+      sshBin,
+      pollIntervalMs: 20,
+      pollTimeoutMs: 2000,
+      probeTimeoutMs: 300,
+    });
+
+    const err = await rejection(mgr.localSocketFor(remoteTarget("workbox", control.path)));
+    expect(err.transient).toBe(true);
+    expect(err.message).toMatch(/ping probe through tunnel socket failed/);
+    expect(err.message).toMatch(/connect to .* port 0 failed: Connection refused/);
+
+    // The ssh that failed its probe must not linger.
+    const pid = readPid(control);
+    await waitFor(() => !isProcessAlive(pid), 2000);
+
+    mgr.stop();
+  });
+
+  test("stderrTail exposes drained ssh stderr while the tunnel is up", async () => {
+    const control = writeControl(tmpDir, "t7", {
+      mode: "listen",
+      stderrBanner: "debug1: Connecting to workbox port 22\n",
+    });
+    const mgr = new TunnelManager(runDir, { sshBin, pollIntervalMs: 20, pollTimeoutMs: 2000 });
+
+    await mgr.localSocketFor(remoteTarget("workbox", control.path));
+    await waitFor(() => mgr.stderrTail("workbox").length > 0, 2000);
+    expect(mgr.stderrTail("workbox")).toContain("debug1: Connecting to workbox port 22");
+    expect(mgr.stderrTail("unknown-target")).toEqual([]);
 
     mgr.stop();
   });
 
   test("retries with backoff after an established tunnel drops, notifying onStateChange", async () => {
-    const control = writeControl(tmpDir, "t4", { mode: "die-after", dieAfterMs: 50 });
+    const control = writeControl(tmpDir, "t4", { mode: "die-after", dieAfterMs: 250 });
     const mgr = new TunnelManager(runDir, {
       sshBin,
       pollIntervalMs: 20,
@@ -222,10 +313,11 @@ describe("TunnelManager", () => {
     expect(fs.statSync(sock).isSocket()).toBe(true);
     expect(spawnCount(control)).toBe(1);
 
-    // die-after (~50ms) fires -> ssh exits -> "down" notified -> backoff
-    // (100ms) -> respawn -> socket reappears -> "up" notified. The
-    // first localSocketFor() call is not re-resolved for this; only
-    // onStateChange + the spawn counter observe it.
+    // die-after (~250ms) fires -> ssh exits -> "down" notified ->
+    // backoff (100ms) -> respawn -> socket reappears + probe pongs ->
+    // "up" notified. The first localSocketFor() call is not
+    // re-resolved for this; only onStateChange + the spawn counter
+    // observe it.
     await waitFor(() => states.some(([, s]) => s === "down"), 3000);
     expect(states).toContainEqual([target.name, "down"]);
 

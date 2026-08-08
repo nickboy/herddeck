@@ -5,15 +5,19 @@ import { join } from "node:path";
 import {
   type CliOptions,
   type DoctorResult,
+  EXPECTED_PROTOCOL,
   type ExecFn,
   LAUNCHD_LABEL,
   buildLaunchAgentPlist,
   checkProtocolMatch,
+  checkRemoteTunnel,
   checkRunDir,
+  checkSshPrecheck,
   formatDoctor,
   isLaunchAgentPlistOurs,
   parseHerdrStatus,
   readConfiguredPort,
+  readRemoteTargetHosts,
   readRemoteTargetNames,
   runCli,
   writeLaunchAgentPlist,
@@ -190,6 +194,66 @@ terminal_app = "Ghostty"
     const p = join(dir, "config.toml");
     writeFileSync(p, `[[targets]]\nname = "local"\nkind = "local"\n`);
     expect(readRemoteTargetNames(p)).toEqual([]);
+  });
+});
+
+describe("readRemoteTargetHosts", () => {
+  test("empty when config file is missing", () => {
+    expect(readRemoteTargetHosts(join(dir, "missing.toml"))).toEqual([]);
+  });
+
+  test("returns {name, host} for remote targets, skipping local", () => {
+    const p = join(dir, "config.toml");
+    writeFileSync(
+      p,
+      `[[targets]]
+name = "local"
+kind = "local"
+
+[[targets]]
+name = "workbox"
+kind = "remote"
+host = "workbox"
+remote_socket = "/home/you/.config/herdr/herdr.sock"
+
+[[targets]]
+name = "gpu-box"
+kind = "remote"
+host = "gpu-box.internal"
+`,
+    );
+    expect(readRemoteTargetHosts(p)).toEqual([
+      { name: "workbox", host: "workbox" },
+      { name: "gpu-box", host: "gpu-box.internal" },
+    ]);
+  });
+
+  test("stops each target block at the next table marker", () => {
+    const p = join(dir, "config.toml");
+    writeFileSync(
+      p,
+      `[[targets]]
+name = "workbox"
+kind = "remote"
+host = "workbox"
+
+[ui]
+terminal_app = "Ghostty"
+`,
+    );
+    expect(readRemoteTargetHosts(p)).toEqual([{ name: "workbox", host: "workbox" }]);
+  });
+
+  test("skips a remote target missing a host key", () => {
+    const p = join(dir, "config.toml");
+    writeFileSync(p, `[[targets]]\nname = "workbox"\nkind = "remote"\n`);
+    expect(readRemoteTargetHosts(p)).toEqual([]);
+  });
+
+  test("empty when only local targets configured", () => {
+    const p = join(dir, "config.toml");
+    writeFileSync(p, `[[targets]]\nname = "local"\nkind = "local"\n`);
+    expect(readRemoteTargetHosts(p)).toEqual([]);
   });
 });
 
@@ -420,6 +484,149 @@ describe("doctor checks", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// checkRemoteTunnel (R4: ping probe through the tunnel socket)
+// ---------------------------------------------------------------------------
+
+describe("checkRemoteTunnel", () => {
+  let runDir: string;
+  let socketPath: string;
+  let server: ReturnType<typeof Bun.listen> | null;
+
+  beforeEach(() => {
+    runDir = join(herddeckDir, "run");
+    mkdirSync(runDir, { recursive: true, mode: 0o700 });
+    socketPath = join(runDir, "workbox.sock");
+    server = null;
+  });
+
+  afterEach(() => {
+    server?.stop(true);
+  });
+
+  test("warns and stays informational when the socket file is absent (lazy tunnel)", async () => {
+    const result = await checkRemoteTunnel(herddeckDir, "workbox");
+    expect(result.name).toBe("tunnel:workbox");
+    expect(result.status).toBe("warn");
+    expect(result.detail).toContain("lazily");
+  });
+
+  test("ok with the remote herdr version + protocol from a matching pong", async () => {
+    server = Bun.listen({
+      unix: socketPath,
+      socket: {
+        data(sock) {
+          sock.write(
+            `${JSON.stringify({
+              id: "doctor",
+              result: {
+                type: "pong",
+                version: "0.9.0-remote",
+                protocol: EXPECTED_PROTOCOL,
+                capabilities: {},
+              },
+            })}\n`,
+          );
+        },
+      },
+    });
+    const result = await checkRemoteTunnel(herddeckDir, "workbox");
+    expect(result.status).toBe("ok");
+    expect(result.detail).toContain("0.9.0-remote");
+    expect(result.detail).toContain(String(EXPECTED_PROTOCOL));
+  });
+
+  test("warns (never fails) when the pong protocol doesn't match EXPECTED_PROTOCOL", async () => {
+    server = Bun.listen({
+      unix: socketPath,
+      socket: {
+        data(sock) {
+          sock.write(
+            `${JSON.stringify({
+              id: "doctor",
+              result: {
+                type: "pong",
+                version: "0.9.0-remote",
+                protocol: EXPECTED_PROTOCOL + 1,
+                capabilities: {},
+              },
+            })}\n`,
+          );
+        },
+      },
+    });
+    const result = await checkRemoteTunnel(herddeckDir, "workbox");
+    expect(result.status).toBe("warn");
+    expect(result.detail).toContain(String(EXPECTED_PROTOCOL + 1));
+    expect(result.detail).toContain("degrades");
+  });
+
+  test("fails with the error message on an error reply", async () => {
+    server = Bun.listen({
+      unix: socketPath,
+      socket: {
+        data(sock) {
+          sock.write(
+            `${JSON.stringify({ id: "doctor", error: { code: "internal_error", message: "remote boom" } })}\n`,
+          );
+        },
+      },
+    });
+    const result = await checkRemoteTunnel(herddeckDir, "workbox");
+    expect(result.status).toBe("fail");
+    expect(result.detail).toContain("remote boom");
+    expect(result.fix).toContain("remote herdr down");
+  });
+
+  test("fails on timeout when nothing replies", async () => {
+    server = Bun.listen({
+      unix: socketPath,
+      socket: {
+        data() {
+          // Connection accepted, request read, deliberately never answered.
+        },
+      },
+    });
+    const result = await checkRemoteTunnel(herddeckDir, "workbox", 100);
+    expect(result.status).toBe("fail");
+    expect(result.detail).toContain("no response within 100ms");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkSshPrecheck (R4: ssh -o BatchMode=yes <host> true)
+// ---------------------------------------------------------------------------
+
+describe("checkSshPrecheck", () => {
+  test("ok when ssh exits 0", async () => {
+    let seenCmd = "";
+    let seenArgs: readonly string[] = [];
+    const exec: ExecFn = async (cmd, args) => {
+      seenCmd = cmd;
+      seenArgs = args;
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const result = await checkSshPrecheck({ exec, targetName: "workbox", host: "workbox" });
+    expect(result.name).toBe("ssh-precheck:workbox");
+    expect(result.status).toBe("ok");
+    expect(seenCmd).toBe("ssh");
+    expect(seenArgs).toEqual(["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "workbox", "true"]);
+  });
+
+  test("fails with the first stderr line on a nonzero exit", async () => {
+    const exec: ExecFn = async () => ({
+      stdout: "",
+      stderr: "Permission denied (publickey).\nsome trailing noise\n",
+      exitCode: 255,
+    });
+    const result = await checkSshPrecheck({ exec, targetName: "workbox", host: "workbox" });
+    expect(result.status).toBe("fail");
+    expect(result.detail).toContain("Permission denied (publickey).");
+    expect(result.detail).not.toContain("some trailing noise");
+    expect(result.fix).toBeDefined();
+  });
+});
+
 describe("formatDoctor", () => {
   test("formats ok/warn/fail with icons, aligns names, includes fix hints for non-ok", () => {
     const results: DoctorResult[] = [
@@ -475,6 +682,9 @@ host = "workbox"
       if (cmd === "launchctl" && args[0] === "print") {
         return { stdout: "", stderr: "", exitCode: 0 };
       }
+      if (cmd === "ssh") {
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
       return { stdout: "", stderr: "", exitCode: 1 };
     };
     const fetchImpl = (async () =>
@@ -490,6 +700,7 @@ host = "workbox"
     expect(io.out).toContain("launchd-loaded");
     expect(io.out).toContain("run-dir");
     expect(io.out).toContain("tunnel:workbox");
+    expect(io.out).toContain("ssh-precheck:workbox");
     expect(code).toBe(0);
   });
 
@@ -514,6 +725,45 @@ host = "workbox"
     const code = await runCli(["doctor"], baseOpts({ exec, fetchImpl }), io);
     expect(code).toBe(1);
     expect(io.out).toContain("❌");
+  });
+
+  test("a failing ssh-precheck for one remote target fails doctor overall", async () => {
+    mkdirSync(herddeckDir, { recursive: true });
+    mkdirSync(join(herddeckDir, "run"), { recursive: true, mode: 0o700 });
+    writeFileSync(
+      configPath,
+      `[[targets]]
+name = "workbox"
+kind = "remote"
+host = "workbox"
+`,
+    );
+
+    const exec: ExecFn = async (cmd, args) => {
+      if (cmd === "herdr" && args[0] === "status") {
+        return {
+          stdout:
+            "client:\n  version: 0.8.0\n  protocol: 19\n\nserver:\n  status: running\n  version: 0.8.0\n  protocol: 19\n  socket: /fake/herdr.sock\n",
+          stderr: "",
+          exitCode: 0,
+        };
+      }
+      if (cmd === "launchctl" && args[0] === "print") {
+        return { stdout: "", stderr: "", exitCode: 0 };
+      }
+      if (cmd === "ssh") {
+        return { stdout: "", stderr: "Host key verification failed.\n", exitCode: 255 };
+      }
+      return { stdout: "", stderr: "", exitCode: 1 };
+    };
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ ok: true, version: "0.1.0" }))) as unknown as typeof fetch;
+
+    const io = captureOutput();
+    const code = await runCli(["doctor"], baseOpts({ exec, fetchImpl }), io);
+    expect(code).toBe(1);
+    expect(io.out).toContain("ssh-precheck:workbox");
+    expect(io.out).toContain("Host key verification failed.");
   });
 });
 

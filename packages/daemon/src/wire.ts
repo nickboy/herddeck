@@ -24,6 +24,12 @@ export interface TargetSnapshot {
   kind: "local" | "remote";
   state: "connecting" | "online" | "offline" | "protocol-mismatch";
   protocol: number | null;
+  /** Remote-tunnel failure classification (additive, optional — the
+   * plugin tolerates unknown/absent fields). "auth": permanent
+   * config/auth failure, no retry. "retrying": transient failure, the
+   * daemon is retrying on backoff. null: tunnel established (or a
+   * local target). */
+  detail?: "auth" | "retrying" | null;
 }
 
 export type WsEvent =

@@ -81,7 +81,9 @@ herddeck doctor
 `doctor` checks herdr is on `PATH` with a matching protocol version, the
 local herdr socket exists with sane permissions, the daemon's `/health`
 endpoint responds, the `launchd` job is loaded, `~/.herddeck/run/` has
-0700 permissions, and (per remote target) that its tunnel socket is up.
+0700 permissions, and (per remote target) an SSH reachability
+pre-check plus a `ping` probe through its tunnel socket rather than
+trusting the socket file's mere existence — see "Remote targets" below.
 
 ### Configuration
 
@@ -110,6 +112,9 @@ name = "workbox"
 kind = "remote"
 host = "workbox"                          # ssh destination (~/.ssh/config applies)
 remote_socket = "/home/you/.config/herdr/herdr.sock"  # ABSOLUTE path on the remote (sshd does not expand ~)
+# named remote sessions: write the full sessions/<name>/herdr.sock path
+# yourself — there's no remote equivalent of `session = "name"` above,
+# see "Remote targets" below.
 ```
 
 ### Context donut (statusline hookup)
@@ -161,6 +166,38 @@ target's SSH auth must not require a prompt:
   Host workbox
     IdentityAgent ~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock
   ```
+
+- **Named sessions on a remote target**: `remote_socket` has no
+  equivalent of the local target's `session` shortcut — write out the
+  full absolute path yourself:
+
+  ```toml
+  [[targets]]
+  name = "workbox-review"
+  kind = "remote"
+  host = "workbox"
+  remote_socket = "/home/you/.config/herdr/sessions/review/herdr.sock"
+  ```
+
+  The named session must have been started at least once on the
+  remote (`herdr --session review` or equivalent, run on `workbox`
+  itself) before that path exists — otherwise the tunnel binds fine
+  locally but `doctor`'s ping probe (or the daemon itself) finds
+  nothing listening on the far end.
+- A composing `session` field for remote targets (mirroring the local
+  target's `session = "name"` → `~/.config/herdr/sessions/<name>/herdr.sock`
+  expansion) is **deliberately not supported** — the daemon has no way
+  to know `$HOME` on the remote machine, so it cannot expand a bare
+  session name into an absolute path there. Always write the full
+  `remote_socket` path for named remote sessions; do not add a
+  `session` key to a `kind = "remote"` target.
+
+`herddeck doctor` verifies each remote target two ways: an SSH
+reachability pre-check (`ssh -o BatchMode=yes <host> true`, catching
+auth/host-key/DNS problems before any tunnel is attempted) and, once
+the local tunnel socket exists, a `ping` probe sent through it —
+reporting the remote herdr's version and protocol, or failing with the
+underlying error if nothing (or an error) comes back.
 
 See the Phase 3 notes in `docs/plans/2026-08-06-master-plan.md` for the
 full verification checklist (network-drop recovery, protocol-mismatch

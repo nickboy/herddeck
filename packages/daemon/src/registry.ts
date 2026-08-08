@@ -4,15 +4,24 @@
 // Remote targets get their socket path from a TunnelProvider (Phase 3
 // TunnelManager implements it); until a tunnel reports ready, the
 // target shows as offline. The registry never spawns herdr.
+//
+// First-attempt tunnel failures are classified (R1): transient ones
+// (network down at boot — launchd starts the daemon before Wi-Fi/VPN
+// is up) are retried here on capped jittered backoff (15s -> 10min) by
+// re-calling localSocketFor(); non-transient ones (auth/config) stay
+// permanently offline. The classification is surfaced to the plugin
+// via TargetSnapshot.detail ("retrying" | "auth" | null).
 
 import type { HerdDeckConfig, TargetConfig } from "./config";
 import { TargetMonitor, type TargetState } from "./herdr/monitor";
 import type { CachedAgent } from "./stateCache";
+import { TunnelError } from "./tunnel";
 import type { AgentSnapshot, SlotStatus, TargetSnapshot } from "./wire";
 
 export interface TunnelProvider {
   /** Resolve the local socket path for a remote target, establishing
-   * the tunnel if needed. Rejects when the tunnel cannot come up. */
+   * the tunnel if needed. Rejects when the tunnel cannot come up —
+   * ideally with a TunnelError so the failure can be classified. */
   localSocketFor(target: TargetConfig & { kind: "remote" }): Promise<string>;
   stop(): void;
 }
@@ -20,6 +29,13 @@ export interface TunnelProvider {
 export interface RegistryEvents {
   targetsChanged(targets: TargetSnapshot[]): void;
   agentsChanged(agents: AgentSnapshot[]): void;
+}
+
+export interface RegistryOptions {
+  /** First-attempt tunnel retry backoff floor (ms). Default 15_000. */
+  tunnelRetryBaseMs?: number;
+  /** First-attempt tunnel retry backoff ceiling (ms). Default 600_000. */
+  tunnelRetryMaxMs?: number;
 }
 
 const STATUS_ORDER: Record<SlotStatus, number> = {
@@ -36,37 +52,98 @@ interface TargetRuntime {
   monitor: TargetMonitor | null;
   state: TargetState;
   protocol: number | null;
+  /** Tunnel failure classification, surfaced on TargetSnapshot. */
+  detail: "auth" | "retrying" | null;
+  retryBackoffMs: number;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  /** The loud console.error fires once per target, not once per retry. */
+  failureLogged: boolean;
 }
 
 export class SessionRegistry {
   private targets = new Map<string, TargetRuntime>();
+  private stopped = false;
+  private readonly tunnelRetryBaseMs: number;
+  private readonly tunnelRetryMaxMs: number;
 
   constructor(
     private config: HerdDeckConfig,
     private events: RegistryEvents,
     private tunnels?: TunnelProvider,
-  ) {}
+    opts: RegistryOptions = {},
+  ) {
+    this.tunnelRetryBaseMs = opts.tunnelRetryBaseMs ?? 15_000;
+    this.tunnelRetryMaxMs = opts.tunnelRetryMaxMs ?? 600_000;
+  }
 
   start(): void {
     for (const t of this.config.targets) {
-      const rt: TargetRuntime = { config: t, monitor: null, state: "connecting", protocol: null };
+      const rt: TargetRuntime = {
+        config: t,
+        monitor: null,
+        state: "connecting",
+        protocol: null,
+        detail: null,
+        retryBackoffMs: this.tunnelRetryBaseMs,
+        retryTimer: null,
+        failureLogged: false,
+      };
       this.targets.set(t.name, rt);
       if (t.kind === "local") {
         this.attachMonitor(rt, t.socket);
       } else if (this.tunnels) {
-        this.tunnels
-          .localSocketFor(t)
-          .then((sock) => this.attachMonitor(rt, sock))
-          .catch((err) => {
-            console.error(`target ${t.name}: tunnel failed: ${err.message}`);
-            rt.state = "offline";
-            this.emitTargets();
-          });
+        this.tryTunnel(rt, t);
       } else {
         rt.state = "offline";
       }
     }
     this.emitTargets();
+  }
+
+  private tryTunnel(rt: TargetRuntime, t: TargetConfig & { kind: "remote" }): void {
+    if (!this.tunnels) return;
+    this.tunnels
+      .localSocketFor(t)
+      .then((sock) => {
+        if (this.stopped) return;
+        rt.detail = null;
+        this.attachMonitor(rt, sock);
+        this.emitTargets();
+      })
+      .catch((err: unknown) => this.onTunnelFailure(rt, t, err));
+  }
+
+  private onTunnelFailure(
+    rt: TargetRuntime,
+    t: TargetConfig & { kind: "remote" },
+    err: unknown,
+  ): void {
+    if (this.stopped) return;
+    // Unclassified errors are treated as permanent: auto-retrying an
+    // unknown failure mode forever is worse than showing it loudly.
+    const transient = err instanceof TunnelError && err.transient;
+    const message = err instanceof Error ? err.message : String(err);
+    if (!rt.failureLogged) {
+      rt.failureLogged = true;
+      console.error(
+        `target ${t.name}: tunnel failed: ${message}${transient ? " (will retry)" : " (not retrying — fix config/auth and restart)"}`,
+      );
+    }
+    rt.state = "offline";
+    rt.detail = transient ? "retrying" : "auth";
+    this.emitTargets();
+    if (transient) this.scheduleTunnelRetry(rt, t);
+  }
+
+  private scheduleTunnelRetry(rt: TargetRuntime, t: TargetConfig & { kind: "remote" }): void {
+    if (this.stopped || rt.retryTimer) return;
+    const jitter = 0.5 + Math.random(); // 0.5x–1.5x
+    const delay = Math.min(rt.retryBackoffMs * jitter, this.tunnelRetryMaxMs);
+    rt.retryBackoffMs = Math.min(rt.retryBackoffMs * 2, this.tunnelRetryMaxMs);
+    rt.retryTimer = setTimeout(() => {
+      rt.retryTimer = null;
+      this.tryTunnel(rt, t);
+    }, delay);
   }
 
   private attachMonitor(rt: TargetRuntime, socketPath: string): void {
@@ -84,7 +161,14 @@ export class SessionRegistry {
   }
 
   stop(): void {
-    for (const rt of this.targets.values()) rt.monitor?.stop();
+    this.stopped = true;
+    for (const rt of this.targets.values()) {
+      if (rt.retryTimer) {
+        clearTimeout(rt.retryTimer);
+        rt.retryTimer = null;
+      }
+      rt.monitor?.stop();
+    }
     this.tunnels?.stop();
   }
 
@@ -103,6 +187,7 @@ export class SessionRegistry {
       kind: rt.config.kind,
       state: rt.state,
       protocol: rt.protocol,
+      detail: rt.detail,
     }));
   }
 

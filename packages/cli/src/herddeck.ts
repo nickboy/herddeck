@@ -13,6 +13,7 @@
 // sharing daemon/src/config.ts's full TOML parser.
 
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -128,10 +129,15 @@ export function readConfiguredPort(configPath: string): number {
   }
 }
 
-/** Names of `[[targets]]` entries with `kind = "remote"`. Used only for
- * doctor's per-target tunnel-socket check — a regex scan is enough; we
- * don't need daemon/src/config.ts's validation or home-expansion. */
-export function readRemoteTargetNames(configPath: string): string[] {
+interface RemoteTargetBlock {
+  name: string;
+  host: string | null;
+}
+
+/** Shared regex-block scan behind readRemoteTargetNames/Hosts below — a
+ * full TOML parse isn't needed for doctor's purposes; we don't need
+ * daemon/src/config.ts's validation or home-expansion. */
+function parseRemoteTargetBlocks(configPath: string): RemoteTargetBlock[] {
   if (!existsSync(configPath)) return [];
   let content: string;
   try {
@@ -140,7 +146,7 @@ export function readRemoteTargetNames(configPath: string): string[] {
     return [];
   }
   const blocks = content.split(/\[\[targets\]\]/).slice(1);
-  const names: string[] = [];
+  const out: RemoteTargetBlock[] = [];
   for (const block of blocks) {
     // Bound each block at the next top-level table/array-of-tables
     // marker, in case a `[[targets]]` entry isn't the last thing in
@@ -150,10 +156,34 @@ export function readRemoteTargetNames(configPath: string): string[] {
     const nameMatch = body.match(/name\s*=\s*"([^"]+)"/);
     const kindMatch = body.match(/kind\s*=\s*"([^"]+)"/);
     if (nameMatch?.[1] && kindMatch?.[1] === "remote") {
-      names.push(nameMatch[1]);
+      const hostMatch = body.match(/host\s*=\s*"([^"]+)"/);
+      out.push({ name: nameMatch[1], host: hostMatch?.[1] ?? null });
     }
   }
-  return names;
+  return out;
+}
+
+/** Names of `[[targets]]` entries with `kind = "remote"`. Used for
+ * doctor's per-target tunnel-socket check. */
+export function readRemoteTargetNames(configPath: string): string[] {
+  return parseRemoteTargetBlocks(configPath).map((b) => b.name);
+}
+
+export interface RemoteTargetHost {
+  name: string;
+  host: string;
+}
+
+/** `{name, host}` for each remote `[[targets]]` entry — used by
+ * doctor's ssh-precheck. Entries missing `host` (a config error the
+ * daemon rejects at load) are skipped; ssh-precheck simply won't run
+ * for them, same as for a missing config file. */
+export function readRemoteTargetHosts(configPath: string): RemoteTargetHost[] {
+  const out: RemoteTargetHost[] = [];
+  for (const b of parseRemoteTargetBlocks(configPath)) {
+    if (b.host) out.push({ name: b.name, host: b.host });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -481,18 +511,142 @@ export function checkRunDir(runDir: string, hasRemoteTargets: boolean): DoctorRe
   return { name: "run-dir", status: "ok", detail: `${runDir} (0700)` };
 }
 
-/** Informational: TunnelManager opens forwarded sockets lazily
- * (docs/CONTRACTS.md), so an absent socket for a configured remote
- * target isn't an error by itself. */
-export function checkRemoteTunnel(herddeckDir: string, targetName: string): DoctorResult {
+interface PingProbeResult {
+  ok: boolean;
+  version?: string;
+  protocol?: number;
+  error?: string;
+}
+
+const PING_PROBE_TIMEOUT_MS = 2000;
+
+/** Hand-rolled ping over herdr's NDJSON unix-socket wire protocol —
+ * duplicates packages/protocol's encodeRequest()/HerdrResponse shape
+ * instead of importing it, so the CLI stays a zero-runtime-dependency
+ * standalone script (see the module-boundary note above). One NDJSON
+ * line out, one line in, then close: herdr answers one request per
+ * connection (docs/CONTRACTS.md). */
+function pingRemoteSocket(
+  socketPath: string,
+  timeoutMs = PING_PROBE_TIMEOUT_MS,
+): Promise<PingProbeResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let buf = "";
+    const sock = connect(socketPath);
+    sock.setEncoding("utf8");
+
+    const settle = (result: PingProbeResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(
+      () => settle({ ok: false, error: `no response within ${timeoutMs}ms` }),
+      timeoutMs,
+    );
+
+    sock.on("connect", () =>
+      sock.write(`${JSON.stringify({ id: "doctor", method: "ping", params: {} })}\n`),
+    );
+    sock.on("data", (chunk: string) => {
+      buf += chunk;
+      const nl = buf.indexOf("\n");
+      if (nl < 0) return;
+      try {
+        const line = JSON.parse(buf.slice(0, nl)) as {
+          error?: { code: string; message: string };
+          result?: { version?: string; protocol?: number };
+        };
+        if (line.error) settle({ ok: false, error: `${line.error.code}: ${line.error.message}` });
+        else settle({ ok: true, version: line.result?.version, protocol: line.result?.protocol });
+      } catch (err) {
+        settle({
+          ok: false,
+          error: `invalid ping response: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    });
+    sock.on("error", (err) => settle({ ok: false, error: err.message }));
+    sock.on("close", () => settle({ ok: false, error: "connection closed with no response" }));
+  });
+}
+
+/** Absent socket stays informational — TunnelManager opens forwarded
+ * sockets lazily (docs/CONTRACTS.md). Once a socket exists, doctor
+ * probes THROUGH it (a real `ping` request) instead of trusting file
+ * existence: `ssh -L` binds the local socket before any channel
+ * reaches the remote, so a present socket alone doesn't prove the
+ * remote herdr is up or that `remote_socket` points at a real path. */
+export async function checkRemoteTunnel(
+  herddeckDir: string,
+  targetName: string,
+  timeoutMs = PING_PROBE_TIMEOUT_MS,
+): Promise<DoctorResult> {
   const socketPath = join(herddeckDir, "run", `${targetName}.sock`);
-  if (existsSync(socketPath)) {
-    return { name: `tunnel:${targetName}`, status: "ok", detail: socketPath };
+  const name = `tunnel:${targetName}`;
+  if (!existsSync(socketPath)) {
+    return {
+      name,
+      status: "warn",
+      detail: `no local tunnel socket at ${socketPath} (informational — tunnels open lazily on first use)`,
+    };
+  }
+  const ping = await pingRemoteSocket(socketPath, timeoutMs);
+  if (!ping.ok) {
+    return {
+      name,
+      status: "fail",
+      detail: `tunnel socket at ${socketPath} did not answer ping: ${ping.error}`,
+      fix: "remote herdr down, or remote_socket in config.toml points at the wrong path on the remote.",
+    };
+  }
+  if (ping.protocol !== EXPECTED_PROTOCOL) {
+    return {
+      name,
+      status: "warn",
+      detail: `remote herdr ${ping.version ?? "?"} (protocol ${ping.protocol ?? "?"}) via ${socketPath} != expected ${EXPECTED_PROTOCOL} (daemon degrades this target to protocol-mismatch rather than assuming parity)`,
+    };
   }
   return {
-    name: `tunnel:${targetName}`,
-    status: "warn",
-    detail: `no local tunnel socket at ${socketPath} (informational — tunnels open lazily on first use)`,
+    name,
+    status: "ok",
+    detail: `remote herdr ${ping.version ?? "?"} (protocol ${ping.protocol}) via ${socketPath}`,
+  };
+}
+
+export interface SshPrecheckOpts {
+  exec: ExecFn;
+  targetName: string;
+  host: string;
+}
+
+/** `ssh -o BatchMode=yes <host> true`, one per remote target — catches
+ * auth failures, unknown/changed host keys, and DNS/hostname typos in
+ * a single line, before the daemon's tunnel machinery ever attempts a
+ * connection (the ping probe above only tells you about a socket that
+ * already exists). */
+export async function checkSshPrecheck(opts: SshPrecheckOpts): Promise<DoctorResult> {
+  const name = `ssh-precheck:${opts.targetName}`;
+  const res = await opts.exec("ssh", [
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=5",
+    opts.host,
+    "true",
+  ]);
+  if (res.exitCode === 0) {
+    return { name, status: "ok", detail: `ssh -o BatchMode=yes ${opts.host} true succeeded` };
+  }
+  const stderrLine = res.stderr.trim().split("\n")[0] ?? "";
+  return {
+    name,
+    status: "fail",
+    detail: `ssh -o BatchMode=yes ${opts.host} true exited ${res.exitCode}${stderrLine ? `: ${stderrLine}` : ""}`,
+    fix: "Check SSH auth (key/agent), host key, and DNS/hostname for this target — see README's Remote targets section.",
   };
 }
 
@@ -511,6 +665,7 @@ export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorResult[]> {
   const { result: herdrBinaryResult, herdrStatus } = await checkHerdrBinary(opts.exec);
   const socketPath = herdrStatus?.socket ?? opts.localSocketPath;
   const remoteTargets = readRemoteTargetNames(opts.configPath);
+  const remoteHosts = new Map(readRemoteTargetHosts(opts.configPath).map((r) => [r.name, r.host]));
   const results: DoctorResult[] = [
     herdrBinaryResult,
     checkHerdrSocket(socketPath),
@@ -520,7 +675,11 @@ export async function runDoctor(opts: RunDoctorOpts): Promise<DoctorResult[]> {
     checkRunDir(join(opts.herddeckDir, "run"), remoteTargets.length > 0),
   ];
   for (const name of remoteTargets) {
-    results.push(checkRemoteTunnel(opts.herddeckDir, name));
+    results.push(await checkRemoteTunnel(opts.herddeckDir, name));
+    const host = remoteHosts.get(name);
+    if (host) {
+      results.push(await checkSshPrecheck({ exec: opts.exec, targetName: name, host }));
+    }
   }
   return results;
 }
@@ -736,8 +895,9 @@ Commands:
   doctor                Health report: herdr on PATH + protocol, local
                         herdr socket, daemon /health, protocol match,
                         launchd job loaded, ~/.herddeck/run/ perms, and
-                        (per remote target) local tunnel socket. Exits
-                        non-zero if any check fails.
+                        (per remote target) a ping probe through the
+                        tunnel socket plus an ssh reachability
+                        pre-check. Exits non-zero if any check fails.
   install               Write ~/Library/LaunchAgents/${LAUNCHD_LABEL}.plist
                         (running \`bun packages/daemon/src/index.ts\`)
                         and bootstrap it via launchctl.
