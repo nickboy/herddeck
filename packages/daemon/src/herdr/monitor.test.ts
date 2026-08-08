@@ -71,6 +71,13 @@ function makeRecorder() {
   };
 }
 
+/** Set tokens on the mock's single seeded agent without a non-null
+ * assertion (banned by lint). */
+function setMockTokens(tokens: Record<string, string>): void {
+  const a = mock.snapshot.agents[0];
+  if (a) a.tokens = tokens;
+}
+
 function seedMockSession(): void {
   mock.snapshot = {
     ...emptySnapshot(),
@@ -296,7 +303,7 @@ describe("context-donut token refresh", () => {
     // leaving the Stream Deck donut frozen at whatever it read when it
     // first connected.
     seedMockSession();
-    mock.snapshot.agents[0]!.tokens = { ctx_pct: "10" };
+    setMockTokens({ ctx_pct: "10" });
     await mock.listen();
 
     const rec = makeRecorder();
@@ -309,7 +316,7 @@ describe("context-donut token refresh", () => {
     await rec.waitAgents((a) => a[0]?.tokens.ctx_pct === "10");
 
     // Server-side change only: no event is pushed on any stream.
-    mock.snapshot.agents[0]!.tokens = { ctx_pct: "73" };
+    setMockTokens({ ctx_pct: "73" });
 
     const updated = await rec.waitAgents((a) => a[0]?.tokens.ctx_pct === "73");
     expect(updated[0]?.tokens.ctx_pct).toBe("73");
@@ -319,7 +326,7 @@ describe("context-donut token refresh", () => {
     // A key that redraws every 10s for no reason is churn the Stream
     // Deck pays for; only real changes may reach the plugin.
     seedMockSession();
-    mock.snapshot.agents[0]!.tokens = { ctx_pct: "42" };
+    setMockTokens({ ctx_pct: "42" });
     await mock.listen();
 
     const rec = makeRecorder();
