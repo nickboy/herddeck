@@ -1032,3 +1032,24 @@ describe("herddeck plugin-install", () => {
     expect(existsSync(join(dest, "stale.js"))).toBe(false);
   });
 });
+
+describe("plugin-install: Stream Deck process detection", () => {
+  test("probes the bundle path, not the app name (the binary is just 'Stream Deck')", async () => {
+    const repoRoot = join(dir, "repo-pgrep");
+    const bundle = join(repoRoot, "packages", "plugin", SD_PLUGIN_DIR);
+    mkdirSync(join(bundle, "bin"), { recursive: true });
+    writeFileSync(join(bundle, "bin", "plugin.js"), "// built");
+    const calls: Array<{ cmd: string; args: readonly string[] }> = [];
+    const exec: ExecFn = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    await runCli(["plugin-install"], baseOpts({ repoRoot, home: dir, exec }), captureOutput());
+
+    const pgrep = calls.find((c) => c.cmd === "pgrep");
+    expect(pgrep?.args[0]).toBe("-f");
+    // `pgrep -x "Elgato Stream Deck"` never matches — the executable is
+    // "Stream Deck" — which silently skipped the relaunch.
+    expect(String(pgrep?.args[1])).toContain(".app/Contents/MacOS");
+  });
+});
