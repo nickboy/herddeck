@@ -6,8 +6,11 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "test": "bun test",
-    "lint": "biome check .",
-    "lint:fix": "biome check --write ."
+    "lint": "biome ci .",
+    "lint:fix": "biome check --write .",
+    "verify": "bun run lint && bunx tsc --noEmit && bun test && bun run lint:sh && bun run lint:md",
+    "lint:sh": "git ls-files '*.sh' | xargs shellcheck -x",
+    "lint:md": "npx --yes markdownlint-cli $(git ls-files '*.md')"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

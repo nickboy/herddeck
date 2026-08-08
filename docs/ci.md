@@ -22,6 +22,23 @@ The workflow triggers on every pull request and on push to `main`.
 Each job does a fresh `bun install --frozen-lockfile` — there's no
 shared cache, so a broken lockfile fails every check the same way.
 
+## Running the same gate locally
+
+```bash
+bun run verify
+```
+
+Runs the same commands the workflow does, in the same order, so a
+green local run means a green CI run.
+
+Note `bun run lint` is `biome ci .`, **not** `biome check .`. The two
+are not interchangeable: `check` reports some rules (e.g.
+`noNonNullAssertion`) without failing, so a "clean" `check` can still
+fail the `lint` job. Always reach for `verify` (or `lint`) rather than
+`check` when deciding whether something is ready to push;
+`lint:fix` (`biome check --write .`) stays the way to apply
+autofixes.
+
 ## Branch protection settings
 
 Applied to `main` via the classic branch-protection API
