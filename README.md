@@ -54,7 +54,8 @@ pushes work non-interactively afterwards. Use the SSH remote only on a
 machine whose agent can sign without a prompt.
 
 `install.sh` installs dependencies, runs the test suite, builds the
-Stream Deck plugin bundle, and bootstraps the daemon as a `launchd`
+Stream Deck plugin bundle, links the `herddeck` CLI into
+`~/.local/bin`, and bootstraps the daemon as a `launchd`
 LaunchAgent (`bun packages/daemon/src/index.ts`, no `.app` bundle, no
 Accessibility/TCC — herdr's socket API replaces all of that; see
 `docs/CONTRACTS.md`).

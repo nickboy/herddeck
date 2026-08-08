@@ -28,6 +28,19 @@ echo "herddeck: running test suite..."
 echo "herddeck: building Stream Deck plugin bundle..."
 (cd "$REPO_ROOT/packages/plugin" && bun run build)
 
+# Put the CLI on PATH — install.sh and the daemon's own output both
+# tell you to run `herddeck doctor`, so the command has to exist.
+# ~/.local/bin is on PATH ahead of Homebrew in this dotfiles setup; the
+# entry point is a shebang script, so a symlink is enough.
+BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
+ln -sf "$REPO_ROOT/packages/cli/src/herddeck.ts" "$BIN_DIR/herddeck"
+if command -v herddeck >/dev/null 2>&1; then
+  echo "herddeck: CLI linked at $BIN_DIR/herddeck"
+else
+  echo "herddeck: CLI linked at $BIN_DIR/herddeck (add it to PATH to use \`herddeck\`)"
+fi
+
 echo "herddeck: bootstrapping daemon LaunchAgent..."
 bun "$REPO_ROOT/packages/cli/src/herddeck.ts" install "$@"
 
