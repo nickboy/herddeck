@@ -977,8 +977,13 @@ export async function runPluginInstall(opts: CliOptions, io: CliIO): Promise<num
   }
 
   // Stream Deck holds the plugin process open; replacing files underneath
-  // a running app leaves it serving the old code.
-  const running = (await opts.exec("pgrep", ["-x", SD_APP])).exitCode === 0;
+  // a running app leaves it serving the old code (and a freshly-copied
+  // plugin never gets scanned, so its keys render as "?").
+  //
+  // Match the bundle path, not the process name: the executable inside
+  // "Elgato Stream Deck.app" is called just "Stream Deck", so `pgrep -x`
+  // on the app name never matches and we silently skip the relaunch.
+  const running = (await opts.exec("pgrep", ["-f", `${SD_APP}.app/Contents/MacOS`])).exitCode === 0;
   if (running) {
     io.stdout("quitting Stream Deck…\n");
     await opts.exec("osascript", ["-e", `quit app "${SD_APP}"`]);
