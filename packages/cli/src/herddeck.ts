@@ -828,6 +828,17 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
   writeLaunchAgentPlist(plistPath, { bunPath: opts.bunPath, daemonEntry, logPath });
   io.stdout(`wrote LaunchAgent plist: ${plistPath}\n`);
 
+  // Re-running install is the documented upgrade path, but launchd
+  // refuses to bootstrap an already-loaded label ("Bootstrap failed: 5:
+  // Input/output error"). Boot it out first — ignoring the failure when
+  // it wasn't loaded — so install is idempotent, then kickstart so the
+  // restarted process picks up newly pulled code.
+  const alreadyLoaded =
+    (await opts.exec("launchctl", ["print", `gui/${opts.uid}/${LAUNCHD_LABEL}`])).exitCode === 0;
+  if (alreadyLoaded) {
+    await opts.exec("launchctl", ["bootout", `gui/${opts.uid}/${LAUNCHD_LABEL}`]);
+  }
+
   const res = await opts.exec("launchctl", ["bootstrap", `gui/${opts.uid}`, plistPath]);
   if (res.exitCode !== 0) {
     io.stderr(
@@ -835,7 +846,9 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
     );
     io.stderr("you may need to run launchctl manually, or check launchd permissions.\n");
   } else {
-    io.stdout(`bootstrapped ${LAUNCHD_LABEL} into gui/${opts.uid}\n`);
+    io.stdout(
+      `${alreadyLoaded ? "reloaded" : "bootstrapped"} ${LAUNCHD_LABEL} into gui/${opts.uid}\n`,
+    );
   }
 
   io.stdout(
