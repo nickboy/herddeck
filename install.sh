@@ -39,6 +39,9 @@ ln -sf "$REPO_ROOT/packages/cli/src/herddeck.ts" "$BIN_DIR/herddeck"
 # feeds the donut by calling it by name, without adopting HerdDeck's
 # own statusline (see README "Context donut").
 ln -sf "$REPO_ROOT/scripts/herddeck-report-ctx.sh" "$BIN_DIR/herddeck-report-ctx"
+# The statusline-free reporter, for machines whose statusline you cannot
+# edit (see README "Context donut").
+ln -sf "$REPO_ROOT/scripts/herddeck-ctx-scan" "$BIN_DIR/herddeck-ctx-scan"
 if command -v herddeck >/dev/null 2>&1; then
   echo "herddeck: CLI linked at $BIN_DIR/herddeck"
 else
