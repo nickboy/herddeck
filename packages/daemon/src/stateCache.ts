@@ -61,6 +61,12 @@ function asNum(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+function sameTokens(a: Record<string, string>, b: Record<string, string>): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => a[k] === b[k]);
+}
+
 /** Lifecycle data may be flat or nest the pane object; read both. */
 function paneField(data: Record<string, unknown>, key: string): unknown {
   if (key in data) return data[key];
@@ -357,6 +363,42 @@ export class StateCache {
   }
 
   /** Agent panes ordered blocked, working, done, idle, unknown; stable by paneId within a group. */
+  /**
+   * Refresh token maps (the context-window donut's `ctx_pct`) from a
+   * freshly fetched snapshot. Returns true iff anything changed.
+   *
+   * This exists because token metadata has no push path: verified live
+   * against herdr 0.8.0, `pane.report_metadata` emits NO event at all,
+   * and `pane.agent_status_changed` carries only `{pane_id,
+   * agent_status}`. Tokens therefore reach us only via
+   * `session.snapshot` — so without a periodic re-read the donut is
+   * frozen at whatever it was when the daemon connected, no matter how
+   * often the agent's statusline reports.
+   *
+   * `pane.updated` does carry tokens and would be the push path, but it
+   * is not a substitute: it fires on scroll offsets and status flicker
+   * (~25 events in 2.5s from a single active pane) and, decisively, it
+   * does NOT fire for a metadata report — so a pane whose context moved
+   * while it sat idle would never be announced.
+   *
+   * Deliberately touches ONLY tokens. Everything else in the cache is
+   * owned by the snapshot-then-replay ordering in TargetMonitor, and
+   * re-seeding here would let a late snapshot regress state that newer
+   * pushed events already advanced.
+   */
+  mergeTokensFromSnapshot(snap: SessionSnapshot): boolean {
+    let changed = false;
+    for (const agent of snap.agents) {
+      const entry = this.panes.get(agent.pane_id);
+      if (!entry) continue;
+      const next = agent.tokens ?? {};
+      if (sameTokens(entry.tokens, next)) continue;
+      entry.tokens = next;
+      changed = true;
+    }
+    return changed;
+  }
+
   agents(): CachedAgent[] {
     const out: CachedAgent[] = [];
     for (const entry of this.panes.values()) {

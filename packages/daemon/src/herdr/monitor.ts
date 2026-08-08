@@ -85,15 +85,27 @@ export class TargetMonitor {
   // extra emissions are cheap.)
   private agentsEmitPending = false;
 
+  // Token metadata (the context donut) has no push path — see
+  // StateCache.mergeTokensFromSnapshot — so it is re-read on a timer.
+  private tokensTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly tokensRefreshMs: number;
+
   constructor(
     readonly name: string,
     socketPath: string,
     private readonly events: TargetMonitorEvents,
-    opts?: { backoffMs?: [min: number, max: number] },
+    opts?: {
+      backoffMs?: [min: number, max: number];
+      /** Token re-read period; 0 disables it. Default 10s — roughly
+       * twice Claude Code's default statusline refresh, so the donut
+       * trails the real percentage by at most one report. */
+      tokensRefreshMs?: number;
+    },
   ) {
     this.client = new HerdrClient(socketPath);
     [this.backoffMin, this.backoffMax] = opts?.backoffMs ?? [1000, 30000];
     this.backoffMs = this.backoffMin;
+    this.tokensRefreshMs = opts?.tokensRefreshMs ?? 10_000;
   }
 
   start(): void {
@@ -124,6 +136,47 @@ export class TargetMonitor {
     this.paneStream = null;
     this.paneStreamKey = "";
     this.paneStreamReopening = false;
+    if (this.tokensTimer) {
+      clearTimeout(this.tokensTimer);
+      this.tokensTimer = null;
+    }
+  }
+
+  /**
+   * Re-read token metadata on a timer, chained rather than on an
+   * interval so a slow snapshot can never stack requests.
+   *
+   * A failed refresh is swallowed: the streams already own connection
+   * health, and tearing down a live connection over a stale donut would
+   * trade a cosmetic lag for real downtime.
+   */
+  private scheduleTokensRefresh(gen: number): void {
+    if (this.tokensRefreshMs <= 0 || !this.running || gen !== this.generation) return;
+    this.tokensTimer = setTimeout(() => {
+      this.tokensTimer = null;
+      void this.refreshTokens(gen);
+    }, this.tokensRefreshMs);
+    // Never hold the event loop open on account of the donut.
+    this.tokensTimer.unref?.();
+  }
+
+  private async refreshTokens(gen: number): Promise<void> {
+    if (gen !== this.generation || !this.running) return;
+    try {
+      const snap = await this.fetchSnapshot();
+      if (gen !== this.generation) return;
+      if (this.cache.mergeTokensFromSnapshot(snap)) this.scheduleAgentsChanged();
+    } catch {
+      // fall through to reschedule
+    }
+    this.scheduleTokensRefresh(gen);
+  }
+
+  private async fetchSnapshot(): Promise<SessionSnapshot> {
+    const res = await this.client.call<Record<string, unknown>>("session.snapshot");
+    // The result nests the snapshot under a "snapshot" key on 0.8.0;
+    // tolerate a flat result too.
+    return (res.snapshot ?? res) as SessionSnapshot;
   }
 
   private async connectCycle(gen: number): Promise<void> {
@@ -160,11 +213,8 @@ export class TargetMonitor {
         return;
       }
 
-      const res = await this.client.call<Record<string, unknown>>("session.snapshot");
+      const snap = await this.fetchSnapshot();
       if (gen !== this.generation) return;
-      // The result nests the snapshot under a "snapshot" key on 0.8.0;
-      // tolerate a flat result too.
-      const snap = (res.snapshot ?? res) as SessionSnapshot;
       this.cache.seedFromSnapshot(snap);
 
       for (const e of buffered) {
@@ -179,6 +229,7 @@ export class TargetMonitor {
       this.backoffMs = this.backoffMin;
       if (!protocolMismatch) this.events.status("online", protocol);
       this.events.agentsChanged(this.cache.agents());
+      this.scheduleTokensRefresh(gen);
     } catch {
       if (gen !== this.generation) return;
       // A failed connect attempt is "offline" regardless of what ping

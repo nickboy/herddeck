@@ -493,3 +493,59 @@ describe("tab labels", () => {
     expect(cache.agents()[0]?.tabLabel).toBeNull();
   });
 });
+
+describe("mergeTokensFromSnapshot", () => {
+  const snapWith = (tokens?: Record<string, string>) =>
+    snapshot([pane("p1")], [agent("p1", "working", 4, tokens ? { tokens } : {})]);
+
+  const seeded = () => {
+    const cache = new StateCache();
+    cache.seedFromSnapshot(snapWith({ ctx_pct: "10" }));
+    return cache;
+  };
+
+  test("updates a changed token and reports the change", () => {
+    const cache = seeded();
+    expect(cache.mergeTokensFromSnapshot(snapWith({ ctx_pct: "73" }))).toBe(true);
+    expect(cache.agents()[0]?.tokens.ctx_pct).toBe("73");
+  });
+
+  test("reports no change for identical tokens", () => {
+    const cache = seeded();
+    expect(cache.mergeTokensFromSnapshot(snapWith({ ctx_pct: "10" }))).toBe(false);
+  });
+
+  test("treats a dropped token as a change", () => {
+    // herdr metadata does not survive a server restart; the donut must
+    // go dark rather than keep rendering a value that no longer exists.
+    const cache = seeded();
+    expect(cache.mergeTokensFromSnapshot(snapWith())).toBe(true);
+    expect(cache.agents()[0]?.tokens).toEqual({});
+  });
+
+  test("ignores agents for panes the cache no longer holds", () => {
+    const cache = seeded();
+    const snap = snapshot(
+      [pane("gone")],
+      [agent("gone", "working", 4, { tokens: { ctx_pct: "73" } })],
+    );
+    expect(cache.mergeTokensFromSnapshot(snap)).toBe(false);
+    expect(cache.agents()[0]?.tokens.ctx_pct).toBe("10");
+  });
+
+  test("touches tokens only, leaving event-owned state alone", () => {
+    // The refresh runs on a timer against a snapshot that may be older
+    // than pushed events already applied; merging anything else would
+    // regress live state.
+    const cache = seeded();
+    cache.applyEvent({
+      event: "pane.agent_status_changed",
+      data: { pane_id: "p1", agent_status: "blocked" },
+    });
+    expect(cache.agents()[0]?.status).toBe("blocked");
+
+    cache.mergeTokensFromSnapshot(snapWith({ ctx_pct: "73" }));
+    expect(cache.agents()[0]?.status).toBe("blocked"); // not back to "working"
+    expect(cache.agents()[0]?.tokens.ctx_pct).toBe("73");
+  });
+});

@@ -105,3 +105,31 @@ and the second request never appears in the server log.
   streams.
 - Kill/restart recovery verified live: online → offline (capped
   backoff) → online within one retry of the server returning.
+
+## Addendum — token metadata has no push path (2026-08-08)
+
+Verified live against herdr 0.8.0 (protocol 19) while chasing a
+context donut frozen at a value nothing had written for days:
+
+- **`pane.report_metadata` emits no event.** Reporting `ctx_pct` to an
+  idle pane while subscribed to `pane.updated` produced zero events
+  for that pane. There is no `pane.metadata_changed`.
+- **`pane.agent_status_changed` carries only `{pane_id,
+  agent_status}`** — no tokens.
+- Therefore tokens reach a client **only** through `session.snapshot`.
+  A daemon that snapshots once on connect shows a donut frozen at
+  connect time forever, no matter how often the agent reports.
+- **`pane.updated` is not a workaround.** It does carry `tokens`, but
+  it fires on scroll offsets and status flicker (~25 events in 2.5s
+  from one active pane) and — decisively — does not fire for a
+  metadata report, so a pane whose context moved while idle is never
+  announced.
+- **`tokens` is merged newest-write-wins across sources.** Reporting
+  `ctx_pct` from a new `source` overwrites a value left by a different
+  source; observed `10` → `88` on the next snapshot. Stale metadata
+  needs no `clear_agent_authority`-style cleanup.
+
+Consequence: `TargetMonitor` re-reads the snapshot on a timer
+(`tokensRefreshMs`, default 10s) and merges **tokens only** —
+re-seeding would let a timer-fetched snapshot regress state that newer
+pushed events already advanced.
