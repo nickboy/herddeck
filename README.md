@@ -189,7 +189,31 @@ It also works chained in front of another command: it echoes the
 upstream command's rendered text off the `display` field of its own
 stdin JSON verbatim, so it never clobbers a richer statusline.
 
-Both paths share the same writer and the same guarantees. They rely on
+**Can't touch the statusline at all?** On a machine whose statusline is
+managed by someone else, run `scripts/herddeck-ctx-scan` on that machine
+instead. It changes nothing in anyone's configuration — it asks the local
+herdr which Claude session each pane is running and reads the token count
+out of the transcript Claude Code already writes:
+
+```bash
+herddeck-ctx-scan            # one pass
+herddeck-ctx-scan --interval 10   # keep reporting
+herddeck-ctx-scan --dry-run -v    # show what it would report
+```
+
+The trade-off is the window size. The percentage needs a limit to divide
+by, and that number appears in exactly one place — the statusline
+payload's `context_window.context_window_size`. It is in neither the
+transcript (whose `message.model` drops the `[1m]` long-context marker),
+nor `~/.claude/sessions/*.json`, nor any hook payload. So this script
+assumes 1M and takes `HERDDECK_CONTEXT_WINDOW` to override it. The token
+count itself is always right; only the division depends on that constant,
+and an overrun clamps to 100% rather than rendering a nonsensical ring.
+
+Prefer the statusline wherever you can edit it: it is exact, needs no
+assumption, and costs no extra process.
+
+Both statusline paths share the same writer and the same guarantees. They rely on
 herdr's injected `HERDR_PANE_ID` / `HERDR_SOCKET_PATH` environment
 variables and fail silently — never breaking the prompt — when those
 are absent, when herdr is stopped, or when the percentage isn't a

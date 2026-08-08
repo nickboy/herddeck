@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""herddeck-ctx-scan — report Claude context usage to herdr without touching
+any statusline.
+
+Runs on the machine where the agents run. One pass:
+
+    local herdr socket  -> each pane's Claude session id (herdr detects it)
+    ~/.claude/projects/*/<session-id>.jsonl -> last `usage` record
+    pane.report_metadata -> tokens.ctx_pct
+
+Why this exists
+---------------
+The statusline route (scripts/herddeck-statusline.sh, herddeck-report-ctx)
+is exact and free, because Claude Code hands the statusline command the
+percentage directly. But it requires editing whichever statusline that
+machine already runs — impossible where the statusline is managed by
+someone else (a company-provided one). This path reads only files Claude
+Code already writes and changes nothing in anyone's configuration.
+
+What it cannot know
+-------------------
+The context window SIZE is not recoverable from anything on disk:
+
+  * the transcript's `message.model` drops the `[1m]` long-context marker
+  * ~/.claude/sessions/<pid>.json carries no model or window
+  * ~/.claude/settings.json holds only the DEFAULT model, so it is wrong
+    for any session that switched with /model
+  * hook payloads carry no token or context data at all (per the official
+    hooks documentation)
+
+It appears in exactly one place: the statusline payload's
+`context_window.context_window_size`. So this script takes the window as a
+constant. Change CONTEXT_WINDOW_TOKENS (or set HERDDECK_CONTEXT_WINDOW) if
+you run a different one — the token count itself is always correct, and
+only the division depends on this number.
+
+Coverage
+--------
+herdr does not always resolve a pane's Claude session id (observed live:
+3 of 4 panes had one). For the rest there is a second, equally
+config-free route: herdr knows the pane's processes and `claude agents
+--json` maps pid -> session id, so the two can be joined. Verified live
+on the pane herdr could not resolve.
+
+A pane neither route resolves is skipped rather than guessed at, so its
+donut stays dark instead of showing a wrong number.
+
+Best-effort throughout: never raises, always exits 0, prints nothing
+unless asked.
+"""
+
+import argparse
+import glob
+import json
+import os
+import socket
+import subprocess
+import sys
+import time
+
+# The one assumption in this script. Not a model->window table on purpose:
+# such a table rots on every model release, and being silently wrong about
+# a percentage is worse than not showing one.
+CONTEXT_WINDOW_TOKENS = int(os.environ.get("HERDDECK_CONTEXT_WINDOW") or 1_000_000)
+
+SOURCE = "herddeck-ctx-scan"
+DEFAULT_SOCKET = "~/.config/herdr/herdr.sock"
+# Enough to hold the tail of a transcript; assistant records with usage are
+# far smaller than this, so one read finds the newest one.
+TAIL_BYTES = 512 * 1024
+
+
+def herdr_call(sock_path, method, params=None, timeout=5.0):
+    """One NDJSON request per connection — herdr answers the first line
+    then closes (see docs/plans/2026-08-06-phase-0-results.md)."""
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(sock_path)
+        req = {"id": "ctx-scan", "method": method, "params": params or {}}
+        s.sendall((json.dumps(req) + "\n").encode("utf-8"))
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    finally:
+        s.close()
+    if not buf:
+        return None
+    return json.loads(buf.split(b"\n", 1)[0])
+
+
+def claude_sessions_by_pid():
+    """pid -> session id, from `claude agents --json`.
+
+    The fallback for panes herdr could not resolve on its own. Claude Code
+    always knows its own sessions, so this closes the gap without any
+    configuration. Returns {} if the CLI is absent or slow."""
+    try:
+        out = subprocess.run(
+            ["claude", "agents", "--json", "--all"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout
+        return {a["pid"]: a["sessionId"] for a in json.loads(out or "[]") if a.get("pid")}
+    except Exception:
+        return {}
+
+
+def pane_pids(sock_path, pane_id):
+    """Every pid herdr attributes to a pane — the shell plus its foreground
+    processes. Claude runs as one of those `node` processes."""
+    try:
+        res = herdr_call(sock_path, "pane.process_info", {"pane_id": pane_id})
+    except OSError:
+        return []
+    info = ((res or {}).get("result") or {}).get("process_info") or {}
+    pids = [info.get("shell_pid")]
+    pids += [p.get("pid") for p in info.get("foreground_processes", [])]
+    return [p for p in pids if p]
+
+
+def transcript_for(session_id):
+    """Claude Code names transcripts <session-id>.jsonl under a per-project
+    directory; the project slug is unknown here, so glob for the id."""
+    hits = glob.glob(os.path.expanduser(f"~/.claude/projects/*/{session_id}.jsonl"))
+    return hits[0] if len(hits) == 1 else (max(hits, key=os.path.getmtime) if hits else None)
+
+
+def _usage_total(record):
+    """Context tokens in one transcript record, or None if it carries no
+    real usage.
+
+    Synthetic records must be skipped. When a session hits a rate limit,
+    Claude Code appends `<synthetic>` assistant records flagged
+    isApiErrorMessage with an all-zero usage block — observed live as six
+    in a row at the tail of a rate-limited session. Taking the newest
+    usage record blindly reads 0% for a session actually sitting at 34%."""
+    message = record.get("message") or {}
+    if record.get("isApiErrorMessage") or message.get("model") == "<synthetic>":
+        return None
+    usage = message.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    total = (
+        usage.get("input_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+        + usage.get("cache_read_input_tokens", 0)
+    )
+    # A zero total is never a real context reading — an agent that has
+    # exchanged anything at all has cache_read tokens.
+    return total or None
+
+
+def used_tokens(path):
+    """Tokens occupying the context window right now: the newest real usage
+    record's input + cache_creation + cache_read. Verified against the
+    statusline's own figure on live sessions.
+
+    Read backwards from the end — transcripts reach tens of MB and only the
+    newest record matters — widening the window if the tail turns out to be
+    all synthetic error records."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    for tail in (TAIL_BYTES, TAIL_BYTES * 8, size):
+        try:
+            with open(path, "rb") as f:
+                f.seek(max(0, size - tail))
+                data = f.read()
+        except OSError:
+            return None
+        # A partial first line is possible after seeking; json.loads
+        # rejects it and the loop moves on.
+        for line in reversed(data.split(b"\n")):
+            if b'"usage"' not in line:
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                continue
+            total = _usage_total(record)
+            if total is not None:
+                return total
+        if tail >= size:
+            break
+    return None
+
+
+def scan(sock_path, dry_run=False, verbose=False):
+    """One pass. Returns the number of panes reported."""
+    try:
+        res = herdr_call(sock_path, "session.snapshot")
+    except OSError:
+        return 0  # herdr not running — nothing to do, not an error
+    if not res or "result" not in res:
+        return 0
+    snapshot = res["result"].get("snapshot") or res["result"]
+
+    reported = 0
+    # Built lazily: only panes herdr could not resolve need it, and the
+    # CLI call is the slowest thing in a pass.
+    by_pid = None
+    for agent in snapshot.get("agents", []):
+        pane_id = agent.get("pane_id")
+        if not pane_id:
+            continue
+        session = (agent.get("agent_session") or {}).get("value")
+        if not session:
+            if by_pid is None:
+                by_pid = claude_sessions_by_pid()
+            for pid in pane_pids(sock_path, pane_id):
+                if pid in by_pid:
+                    session = by_pid[pid]
+                    if verbose:
+                        print(f"{pane_id}: resolved via pid {pid} (herdr had none)")
+                    break
+        if not session:
+            if verbose:
+                print(f"{pane_id}: no Claude session id — skipped")
+            continue
+
+        path = transcript_for(session)
+        tokens = used_tokens(path) if path else None
+        if tokens is None:
+            if verbose:
+                print(f"{pane_id}: no usable transcript — skipped")
+            continue
+
+        pct = min(100, max(0, tokens * 100 // CONTEXT_WINDOW_TOKENS))
+        current = (agent.get("tokens") or {}).get("ctx_pct")
+        if verbose:
+            print(f"{pane_id}: {tokens} tok -> {pct}% (herdr has {current!r})")
+        # An unchanged value still costs the Stream Deck a redraw upstream,
+        # so only write real changes.
+        if current == str(pct) or dry_run:
+            continue
+        try:
+            herdr_call(
+                sock_path,
+                "pane.report_metadata",
+                {"pane_id": pane_id, "source": SOURCE, "tokens": {"ctx_pct": str(pct)}},
+            )
+            reported += 1
+        except OSError:
+            pass
+    return reported
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    p.add_argument(
+        "--socket",
+        default=os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser(DEFAULT_SOCKET),
+        help="herdr API socket (default: $HERDR_SOCKET_PATH or ~/.config/herdr/herdr.sock)",
+    )
+    p.add_argument(
+        "--interval",
+        type=float,
+        default=0,
+        help="repeat every N seconds instead of scanning once and exiting",
+    )
+    p.add_argument("--dry-run", action="store_true", help="compute but do not report")
+    p.add_argument("-v", "--verbose", action="store_true", help="print per-pane detail")
+    args = p.parse_args()
+
+    while True:
+        try:
+            scan(args.socket, dry_run=args.dry_run, verbose=args.verbose)
+        except Exception as exc:  # never die on one bad pass
+            if args.verbose:
+                print(f"scan failed: {exc}", file=sys.stderr)
+        if args.interval <= 0:
+            return 0
+        time.sleep(args.interval)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)
