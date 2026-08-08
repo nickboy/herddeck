@@ -81,9 +81,24 @@ Code resolves the window itself (including the `[1m]` suffix and the
 `used_percentage`. Reading that number is why the preferred route cannot
 rot.
 
-Open question worth revisiting: whether Anthropic exposes per-model
-context windows in a machine-readable form that a tool could read
-instead of assuming.
+One alternative was found and not taken: scraping Claude Code's own
+`/context` output (via `tmux capture-pane`, or by resuming the session
+and sending the command). It needs no table and no statusline, and is
+rot-free because Claude Code computes the number — but it is brittle to
+any UI change, and the resume variant mutates the session it measures.
+Recorded here because it is the only known way to get the true window
+for a session you did not spawn.
+
+Anthropic's API exposes `max_input_tokens` per model id, which is
+machine-readable and rot-free but structurally blind to the `[1m]`
+variants — so it cannot answer this question either.
+
+Two design choices are worth keeping for the reasons other tools
+illustrate. `ctx-scan` includes `cache_read_input_tokens` in its total,
+normally the largest component and omitted by at least one shipping
+tool. And it skips a pane it cannot resolve instead of guessing, which
+matches the best-behaved implementation surveyed — returning "unknown"
+rather than fabricating a number.
 
 One claim to keep an eye on: it has been argued elsewhere that deriving
 usage from the transcript systematically under-reports, because
