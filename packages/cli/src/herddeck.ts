@@ -43,6 +43,8 @@ export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Res
 export interface CliOptions {
   home: string;
   herddeckDir: string;
+  /** Daemon auth token override; defaults to reading the token file. */
+  token?: string | null;
   configPath: string;
   launchAgentsDir: string;
   /** Repo root, used to locate packages/daemon/src/index.ts for the plist. */
@@ -60,7 +62,7 @@ const DEFAULT_PORT = 9137;
  * packages/protocol EXPECTED_PROTOCOL). Duplicated here rather than
  * importing @herddeck/protocol so the CLI stays a zero-dependency
  * standalone script. */
-const EXPECTED_PROTOCOL = 19;
+export const EXPECTED_PROTOCOL = 19;
 
 export const LAUNCHD_LABEL = "com.nickboy.herddeck.daemon";
 
@@ -351,11 +353,28 @@ export function checkHerdrSocket(socketPath: string): DoctorResult {
 export interface DaemonHealthOpts {
   url: string;
   fetchImpl: FetchLike;
+  token?: string | null;
+}
+
+/** Reads the daemon's 0600 auth-token file; null when absent (daemon
+ * running without auth, or not yet started). */
+export function readAuthToken(tokenFilePath?: string): string | null {
+  const p = tokenFilePath ?? join(homedir(), ".herddeck", "auth-token");
+  try {
+    const token = readFileSync(p, "utf8").trim();
+    return token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+function authInit(token: string | null | undefined): RequestInit | undefined {
+  return token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
 }
 
 export async function checkDaemonHealth(opts: DaemonHealthOpts): Promise<DoctorResult> {
   try {
-    const res = await opts.fetchImpl(opts.url);
+    const res = await opts.fetchImpl(opts.url, authInit(opts.token ?? readAuthToken()));
     if (!res.ok) {
       return {
         name: "daemon-health",
@@ -576,7 +595,7 @@ export async function runStatus(
 
   let res: Response;
   try {
-    res = await opts.fetchImpl(url);
+    res = await opts.fetchImpl(url, authInit(opts.token ?? readAuthToken()));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     io.stderr(

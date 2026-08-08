@@ -459,3 +459,36 @@ describe("DeckServer", () => {
     expect(wisprCalls).toEqual(["start"]);
   });
 });
+
+describe("token auth", () => {
+  test("rejects /health and /ws without the token; accepts bearer and query", async () => {
+    const registry = makeRegistry({});
+    const { deps } = makeDeps(registry);
+    deps.token = "sekret";
+    server = new DeckServer(deps);
+    const p = nextPort();
+    server.start(p);
+
+    const noAuth = await fetch(`http://127.0.0.1:${p}/health`);
+    expect(noAuth.status).toBe(401);
+    const bearer = await fetch(`http://127.0.0.1:${p}/health`, {
+      headers: { authorization: "Bearer sekret" },
+    });
+    expect(bearer.status).toBe(200);
+
+    const wsBad = new WebSocket(`ws://127.0.0.1:${p}/ws`);
+    await new Promise<void>((res) => {
+      wsBad.onclose = () => res();
+      wsBad.onerror = () => {};
+    });
+
+    const wsGood = new WebSocket(`ws://127.0.0.1:${p}/ws?token=sekret`);
+    const opened = await new Promise<boolean>((res) => {
+      wsGood.onopen = () => res(true);
+      wsGood.onclose = () => res(false);
+      wsGood.onerror = () => {};
+    });
+    expect(opened).toBe(true);
+    wsGood.close();
+  });
+});

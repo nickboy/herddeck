@@ -83,7 +83,7 @@ session = "name"       # optional named session → ~/.config/herdr/sessions/<na
 name = "workbox"
 kind = "remote"
 host = "workbox"                          # ssh destination (~/.ssh/config applies)
-remote_socket = "~/.config/herdr/herdr.sock"  # path on the remote
+remote_socket = "/home/you/.config/herdr/herdr.sock"  # ABSOLUTE path on the remote (sshd does not expand ~)
 ```
 
 Missing file ⇒ default single local target. Parse errors are fatal

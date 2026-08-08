@@ -104,5 +104,7 @@ except Exception:
 ' 2>/dev/null)"
 fi
 
-printf '%s\n' "$DISPLAY_TEXT"
+# Only emit a line when there is upstream text — an unconditional
+# printf would render a blank statusline row.
+[ -n "$DISPLAY_TEXT" ] && printf '%s\n' "$DISPLAY_TEXT"
 exit 0

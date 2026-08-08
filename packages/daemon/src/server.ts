@@ -15,6 +15,14 @@ export interface ServerDeps {
   /** Foreground the terminal app (local targets only). */
   focusTerminal: () => Promise<void>;
   wispr: { start: () => void; stop: () => void };
+  /**
+   * When set, /ws and /health require it (Authorization: Bearer or
+   * ?token=). The WS surface can inject keystrokes into panes — the
+   * same capability the 0700 run-dir protects — so the localhost TCP
+   * port must not be an unauthenticated back door for other local
+   * processes/users.
+   */
+  token?: string;
 }
 
 export class DeckServer {
@@ -31,6 +39,9 @@ export class DeckServer {
       port,
       fetch: (req, server) => {
         const url = new URL(req.url);
+        if (this.deps.token !== undefined && !this.authorized(req, url)) {
+          return new Response("unauthorized", { status: 401 });
+        }
         if (url.pathname === "/health") {
           return Response.json({
             ok: true,
@@ -64,6 +75,12 @@ export class DeckServer {
   stop(): void {
     this.server?.stop(true);
     this.server = null;
+  }
+
+  private authorized(req: Request, url: URL): boolean {
+    const bearer = req.headers.get("authorization");
+    if (bearer === `Bearer ${this.deps.token}`) return true;
+    return url.searchParams.get("token") === this.deps.token;
   }
 
   broadcast(event: WsEvent): void {
@@ -131,10 +148,14 @@ export class DeckServer {
       case "worktree:create": {
         const monitor = registry.monitorFor(cmd.target);
         if (!monitor) return;
-        await monitor.call("worktree.create", {
-          workspace_id: cmd.workspaceId ?? null,
-          focus: true,
-        });
+        // Omit workspace_id entirely when unset — herdr's optional
+        // fields aren't guaranteed to accept an explicit JSON null.
+        await monitor.call(
+          "worktree.create",
+          cmd.workspaceId !== undefined
+            ? { workspace_id: cmd.workspaceId, focus: true }
+            : { focus: true },
+        );
         return;
       }
       case "prompt:canned": {

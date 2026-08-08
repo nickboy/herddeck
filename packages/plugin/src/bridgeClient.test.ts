@@ -51,6 +51,7 @@ afterEach(() => {
 function makeClient(override: Partial<ConstructorParameters<typeof BridgeClient>[0]> = {}) {
   return new BridgeClient({
     url: "ws://test",
+    tokenPath: "/nonexistent/herddeck-test-token",
     initialBackoffMs: 10,
     maxBackoffMs: 100,
     WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
@@ -70,7 +71,10 @@ const latestSocket = () => FakeWebSocket.instances.at(-1);
 
 describe("BridgeClient defaults", () => {
   test("defaults to the v2 daemon WS URL (127.0.0.1:9137)", () => {
-    client = new BridgeClient({ WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket });
+    client = new BridgeClient({
+      WebSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+      tokenPath: "/nonexistent/herddeck-test-token",
+    });
     client.start();
     expect(latestSocket()?.url).toBe("ws://127.0.0.1:9137/ws");
   });
@@ -249,5 +253,21 @@ describe("BridgeClient reconnect with exponential backoff", () => {
     expect(timeouts).toHaveLength(1);
     client.stop();
     expect(timeouts).toHaveLength(0);
+  });
+});
+
+describe("BridgeClient token", () => {
+  test("appends ?token= from the token file when present", async () => {
+    const dir = await import("node:fs").then((fs) => {
+      const os = require("node:os");
+      const path = require("node:path");
+      const d = fs.mkdtempSync(path.join(os.tmpdir(), "herddeck-token-"));
+      fs.writeFileSync(path.join(d, "auth-token"), "tok123\n");
+      return d;
+    });
+    const path = require("node:path");
+    client = makeClient({ tokenPath: path.join(dir, "auth-token") });
+    client.start();
+    expect(latestSocket()?.url).toBe("ws://test?token=tok123");
   });
 });
