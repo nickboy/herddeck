@@ -71,6 +71,13 @@ function makeRecorder() {
   };
 }
 
+/** Set tokens on the mock's single seeded agent without a non-null
+ * assertion (banned by lint). */
+function setMockTokens(tokens: Record<string, string>): void {
+  const a = mock.snapshot.agents[0];
+  if (a) a.tokens = tokens;
+}
+
 function seedMockSession(): void {
   mock.snapshot = {
     ...emptySnapshot(),
@@ -283,5 +290,98 @@ describe("stale pane subscriptions", () => {
     expect(rec.statuses.filter((s) => s.state === "connecting").length).toBe(1);
     expect(rec.statuses[rec.statuses.length - 1]?.state).toBe("online");
     expect(monitor.cache.paneIds()).toEqual(["p1"]);
+  });
+});
+
+describe("context-donut token refresh", () => {
+  test("picks up a token change that arrives with no event at all", async () => {
+    // The regression this whole path exists for. Verified live against
+    // herdr 0.8.0: pane.report_metadata emits NO event, and
+    // pane.agent_status_changed carries only {pane_id, agent_status}.
+    // So an agent's statusline can report a fresh ctx_pct every turn
+    // and — without this refresh — the daemon would never learn of it,
+    // leaving the Stream Deck donut frozen at whatever it read when it
+    // first connected.
+    seedMockSession();
+    setMockTokens({ ctx_pct: "10" });
+    await mock.listen();
+
+    const rec = makeRecorder();
+    monitor = new TargetMonitor("local", sockPath, rec.events, {
+      backoffMs: [10, 100],
+      tokensRefreshMs: 30,
+    });
+    monitor.start();
+
+    await rec.waitAgents((a) => a[0]?.tokens.ctx_pct === "10");
+
+    // Server-side change only: no event is pushed on any stream.
+    setMockTokens({ ctx_pct: "73" });
+
+    const updated = await rec.waitAgents((a) => a[0]?.tokens.ctx_pct === "73");
+    expect(updated[0]?.tokens.ctx_pct).toBe("73");
+  });
+
+  test("does not emit when the tokens are unchanged", async () => {
+    // A key that redraws every 10s for no reason is churn the Stream
+    // Deck pays for; only real changes may reach the plugin.
+    seedMockSession();
+    setMockTokens({ ctx_pct: "42" });
+    await mock.listen();
+
+    const rec = makeRecorder();
+    monitor = new TargetMonitor("local", sockPath, rec.events, {
+      backoffMs: [10, 100],
+      tokensRefreshMs: 20,
+    });
+    monitor.start();
+    await rec.waitStatus((s) => s.state === "online");
+    const after = rec.agentUpdates.length;
+
+    await new Promise((r) => setTimeout(r, 150)); // several refresh ticks
+    expect(rec.agentUpdates.length).toBe(after);
+    // ...and the refreshes really did happen.
+    expect(mock.requests.filter((r) => r.method === "session.snapshot").length).toBeGreaterThan(1);
+  });
+
+  test("refreshing never resurrects a pane the event path removed", async () => {
+    // The refresh re-reads a full snapshot but must merge tokens ONLY:
+    // re-seeding would let a stale snapshot undo a close that a newer
+    // pushed event already applied.
+    seedMockSession();
+    await mock.listen();
+
+    const rec = makeRecorder();
+    monitor = new TargetMonitor("local", sockPath, rec.events, {
+      backoffMs: [10, 100],
+      tokensRefreshMs: 20,
+    });
+    monitor.start();
+    await rec.waitStatus((s) => s.state === "online");
+
+    mock.streams[0]?.push("pane_closed", { pane_id: "p1" });
+    await rec.waitAgents((a) => a.length === 0);
+
+    // The mock's snapshot still lists p1 — several refreshes must not
+    // bring it back.
+    await new Promise((r) => setTimeout(r, 120));
+    expect(monitor.cache.paneIds()).toEqual([]);
+    expect(rec.agentUpdates.at(-1)).toEqual([]);
+  });
+
+  test("tokensRefreshMs: 0 disables the poll entirely", async () => {
+    seedMockSession();
+    await mock.listen();
+
+    const rec = makeRecorder();
+    monitor = new TargetMonitor("local", sockPath, rec.events, {
+      backoffMs: [10, 100],
+      tokensRefreshMs: 0,
+    });
+    monitor.start();
+    await rec.waitStatus((s) => s.state === "online");
+
+    await new Promise((r) => setTimeout(r, 120));
+    expect(mock.requests.filter((r) => r.method === "session.snapshot").length).toBe(1);
   });
 });
