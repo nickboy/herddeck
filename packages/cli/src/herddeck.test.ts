@@ -850,9 +850,10 @@ describe("herddeck status", () => {
 describe("herddeck install / uninstall", () => {
   test("install writes the plist and bootstraps via the injected exec (no real launchctl)", async () => {
     const calls: Array<{ cmd: string; args: readonly string[] }> = [];
+    // `print` nonzero ⇒ the label isn't loaded yet (fresh install).
     const exec: ExecFn = async (cmd, args) => {
       calls.push({ cmd, args });
-      return { stdout: "", stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
     };
     const io = captureOutput();
     const code = await runCli(
@@ -869,8 +870,33 @@ describe("herddeck install / uninstall", () => {
     expect(content).toContain("/fake/repo/packages/daemon/src/index.ts");
     expect(content).toContain(join(herddeckDir, "daemon.log"));
 
-    expect(calls).toEqual([{ cmd: "launchctl", args: ["bootstrap", "gui/501", plistPath] }]);
+    // No bootout when nothing was loaded.
+    expect(calls).toEqual([
+      { cmd: "launchctl", args: ["print", `gui/501/${LAUNCHD_LABEL}`] },
+      { cmd: "launchctl", args: ["bootstrap", "gui/501", plistPath] },
+    ]);
     expect(io.out).toContain("herddeck daemon installed");
+  });
+
+  test("re-running install boots out the loaded label first (idempotent upgrade path)", async () => {
+    const calls: Array<{ cmd: string; args: readonly string[] }> = [];
+    // `print` exit 0 ⇒ already bootstrapped; a bare bootstrap would fail
+    // with launchd's "Bootstrap failed: 5: Input/output error".
+    const exec: ExecFn = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const io = captureOutput();
+    const code = await runCli(["install"], baseOpts({ exec, uid: "501" }), io);
+    expect(code).toBe(0);
+
+    const plistPath = join(launchAgentsDir, `${LAUNCHD_LABEL}.plist`);
+    expect(calls).toEqual([
+      { cmd: "launchctl", args: ["print", `gui/501/${LAUNCHD_LABEL}`] },
+      { cmd: "launchctl", args: ["bootout", `gui/501/${LAUNCHD_LABEL}`] },
+      { cmd: "launchctl", args: ["bootstrap", "gui/501", plistPath] },
+    ]);
+    expect(io.out).toContain("reloaded");
   });
 
   test("install reports failure (nonzero exit) when launchctl bootstrap fails", async () => {
