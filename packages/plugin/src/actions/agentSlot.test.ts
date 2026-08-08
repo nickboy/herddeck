@@ -292,3 +292,30 @@ describe("renderAgentSlotImage — target suffix", () => {
     expect(url).not.toContain(encodeURIComponent("workbox"));
   });
 });
+
+describe("renderAgentSlot — live terminal title", () => {
+  test("terminal title outranks tab label (it follows /rename live)", () => {
+    const r = renderAgentSlot(
+      makeAgent({ name: null, title: "herdr-limit", tabLabel: "workspace" }),
+      false,
+      false,
+    );
+    // 10-char key budget clips the tail; the point is which source won.
+    expect(r.displayName).toContain("herdr-lim");
+    expect(r.displayName).not.toContain("workspace");
+  });
+
+  test("falls back to the tab label when no terminal title", () => {
+    const r = renderAgentSlot(
+      makeAgent({ name: null, title: null, tabLabel: "Dotfiles" }),
+      false,
+      false,
+    );
+    expect(r.displayName).toContain("Dotfiles");
+  });
+
+  test("an explicit agent name still wins", () => {
+    const r = renderAgentSlot(makeAgent({ name: "alpha", title: "herdr-limit" }), false, false);
+    expect(r.displayName).toContain("alpha");
+  });
+});
