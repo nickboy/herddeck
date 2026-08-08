@@ -14,6 +14,7 @@
 
 import type { HerdDeckConfig, TargetConfig } from "./config";
 import { TargetMonitor, type TargetState } from "./herdr/monitor";
+import { logDiag } from "./log";
 import type { CachedAgent } from "./stateCache";
 import { TunnelError } from "./tunnel";
 import type { AgentSnapshot, SlotStatus, TargetSnapshot } from "./wire";
@@ -78,7 +79,7 @@ export class SessionRegistry {
   ) {
     this.tunnelRetryBaseMs = opts.tunnelRetryBaseMs ?? 15_000;
     this.tunnelRetryMaxMs = opts.tunnelRetryMaxMs ?? 600_000;
-    this.log = opts.log ?? ((m) => console.error(m));
+    this.log = opts.log ?? logDiag;
   }
 
   start(): void {

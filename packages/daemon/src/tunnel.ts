@@ -39,6 +39,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { TargetConfig } from "./config";
 import { HerdrClient } from "./herdr/client";
+import { logDiag } from "./log";
 import type { TunnelProvider } from "./registry";
 
 export type TunnelState = "up" | "down";
@@ -137,7 +138,7 @@ export class TunnelManager implements TunnelProvider {
     opts: TunnelManagerOptions = {},
   ) {
     this.sshBin = opts.sshBin ?? "ssh";
-    this.log = opts.log ?? ((m) => console.error(m));
+    this.log = opts.log ?? logDiag;
     this.pollIntervalMs = opts.pollIntervalMs ?? 200;
     this.pollTimeoutMs = opts.pollTimeoutMs ?? 10_000;
     this.probeTimeoutMs = opts.probeTimeoutMs ?? 4_000;

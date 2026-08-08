@@ -1,3 +1,4 @@
+import { logDiag } from "./log";
 // Bring the terminal app hosting herdr to the foreground. `open -a`
 // needs no Accessibility/TCC grant — the whole reason jump-to-tab got
 // simple in the herdr rebuild (herdr's agent.focus selects the right
@@ -8,6 +9,6 @@ export async function focusTerminalApp(app: string): Promise<void> {
   const code = await proc.exited;
   if (code !== 0) {
     const err = await new Response(proc.stderr).text();
-    console.error(`focusTerminalApp: open -a ${app} exited ${code}: ${err.trim()}`);
+    logDiag(`focusTerminalApp: open -a ${app} exited ${code}: ${err.trim()}`);
   }
 }
