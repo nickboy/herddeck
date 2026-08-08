@@ -86,7 +86,15 @@ export function renderAgentSlot(
   // workspace label, then the cwd basename — see docs/CONTRACTS.md
   // "Slot title".
   const base =
-    agent.name || agent.tabLabel || agent.workspaceLabel || basename(agent.cwd ?? "") || "";
+    // terminal title first: Claude Code re-emits it via OSC on /rename,
+    // so it tracks the session name live, while a tab label is frozen at
+    // session start (no rename hook exists to refresh it).
+    agent.name ||
+    agent.title ||
+    agent.tabLabel ||
+    agent.workspaceLabel ||
+    basename(agent.cwd ?? "") ||
+    "";
   const truncated = truncate(base, charBudget);
   const displayName = focused ? `▸ ${truncated}` : truncated;
 
