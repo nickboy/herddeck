@@ -4,7 +4,7 @@
 #
 # Two jobs, both best-effort:
 #
-#   1. Extract `.context_window.percentUsed` from the per-turn
+#   1. Extract `.context_window.used_percentage` from the per-turn
 #      statusline JSON on stdin and report it to herdr via
 #      `pane.report_metadata`, so the daemon can read
 #      `AgentInfo.tokens.ctx_pct` and light up the Stream Deck donut.
@@ -35,55 +35,40 @@
 
 INPUT="$(cat 2>/dev/null)"
 
-# --- 1. extract percentUsed, report to herdr (best-effort, silent) ---
+# --- 1. extract context-window %, report to herdr (best-effort, silent) ---
+#
+# Field name: Claude Code emits `.context_window.used_percentage`. An
+# earlier revision of this script read `.percentUsed`, which does not
+# exist — the extraction silently yielded nothing and the donut never
+# lit up. `percentUsed` is kept only as a fallback so the script also
+# works against any build that ever used it; `used_percentage` wins.
 
 PCT=""
 if command -v jq >/dev/null 2>&1; then
-  PCT="$(printf '%s' "$INPUT" | jq -r '.context_window.percentUsed // empty' 2>/dev/null)"
+  PCT="$(printf '%s' "$INPUT" | jq -r '.context_window | (.used_percentage // .percentUsed // empty)' 2>/dev/null)"
 elif command -v python3 >/dev/null 2>&1; then
   PCT="$(printf '%s' "$INPUT" | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
-    pct = data.get("context_window", {}).get("percentUsed", "")
-    if pct != "" and pct is not None:
+    cw = data.get("context_window") or {}
+    pct = cw.get("used_percentage")
+    if pct is None:
+        pct = cw.get("percentUsed")
+    if pct is not None and pct != "":
         print(pct)
 except Exception:
     pass
 ' 2>/dev/null)"
 fi
 
-# Normalize to a rounded integer string; stays empty if PCT wasn't a
-# plain number, so we never report garbage as ctx_pct.
-PCT_INT=""
-if [ -n "$PCT" ]; then
-  PCT_INT="$(printf '%s' "$PCT" | awk '{ if ($1 ~ /^[0-9]+(\.[0-9]+)?$/) printf "%d", $1 + 0.5 }' 2>/dev/null)"
-fi
-
-if [ -n "$PCT_INT" ] && [ -n "${HERDR_PANE_ID:-}" ] && [ -n "${HERDR_SOCKET_PATH:-}" ] \
-  && command -v python3 >/dev/null 2>&1; then
-  python3 -c '
-import json, socket, sys, time
-
-pane_id, socket_path, pct = sys.argv[1], sys.argv[2], sys.argv[3]
-req = {
-    "id": "herddeck-statusline-%d" % int(time.time() * 1000),
-    "method": "pane.report_metadata",
-    "params": {
-        "pane_id": pane_id,
-        "source": "herddeck-statusline",
-        "tokens": {"ctx_pct": pct},
-    },
-}
-try:
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(1)
-    s.connect(socket_path)
-    s.sendall((json.dumps(req) + "\n").encode("utf-8"))
-    s.close()
-except Exception:
-    pass
-' "$HERDR_PANE_ID" "$HERDR_SOCKET_PATH" "$PCT_INT" >/dev/null 2>&1 &
+# The herdr write itself lives in herddeck-report-ctx (one
+# implementation, shared with people who keep their own statusline and
+# just add a call to it). Backgrounded so a hung socket can never stall
+# the prompt; validation of PCT happens in there.
+REPORTER="$(dirname "$0")/herddeck-report-ctx.sh"
+if [ -n "$PCT" ] && [ -x "$REPORTER" ]; then
+  "$REPORTER" "$PCT" >/dev/null 2>&1 &
 fi
 
 # --- 2. passthrough: echo .display verbatim if present, else nothing ---
