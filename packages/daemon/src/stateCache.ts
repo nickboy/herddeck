@@ -17,6 +17,7 @@ export interface CachedAgent {
   status: AgentStatus;
   cwd: string | null;
   title: string | null;
+  tabLabel: string | null;
   tokens: Record<string, string>;
   stateChangeSeq: number;
   revision: number;
@@ -73,13 +74,24 @@ function paneField(data: Record<string, unknown>, key: string): unknown {
 export class StateCache {
   private panes = new Map<string, PaneEntry>();
   private workspaceLabels = new Map<string, string | null>();
+  private tabLabels = new Map<string, string | null>();
 
   seedFromSnapshot(snap: SessionSnapshot): void {
     this.panes.clear();
     this.workspaceLabels.clear();
+    this.tabLabels.clear();
 
     for (const ws of snap.workspaces) {
       this.workspaceLabels.set(ws.workspace_id, ws.label ?? null);
+    }
+    // snap.tabs is `unknown[]` on the wire (protocol doesn't pin its
+    // shape yet) — narrow defensively, same as event payloads below.
+    for (const t of snap.tabs) {
+      if (typeof t !== "object" || t === null) continue;
+      const rec = t as Record<string, unknown>;
+      const id = asStr(rec.tab_id);
+      if (!id) continue;
+      this.tabLabels.set(id, asStr(rec.label));
     }
     for (const pane of snap.panes) {
       this.panes.set(pane.pane_id, {
@@ -147,6 +159,9 @@ export class StateCache {
         return this.applyWorkspaceUpsert(data);
       case "workspace_closed":
         return this.applyContainerClosed(data, "workspaceId");
+      case "tab_created":
+      case "tab_renamed":
+        return this.applyTabUpsert(data);
       case "tab_closed":
         return this.applyContainerClosed(data, "tabId");
       default:
@@ -161,6 +176,18 @@ export class StateCache {
     const id = asStr(rec.workspace_id);
     if (!id) return false;
     this.workspaceLabels.set(id, asStr(rec.label));
+    // Label changes don't affect agents(); callers re-read labels lazily.
+    return false;
+  }
+
+  /** tab.created / tab.renamed — data may nest the tab object under
+   * `data.tab` or be flat, same tolerance as paneField(). */
+  private applyTabUpsert(data: Record<string, unknown>): boolean {
+    const tab = data.tab;
+    const rec = typeof tab === "object" && tab !== null ? (tab as Record<string, unknown>) : data;
+    const id = asStr(rec.tab_id);
+    if (!id) return false;
+    this.tabLabels.set(id, asStr(rec.label));
     // Label changes don't affect agents(); callers re-read labels lazily.
     return false;
   }
@@ -188,6 +215,7 @@ export class StateCache {
       }
     }
     if (field === "workspaceId") this.workspaceLabels.delete(id);
+    if (field === "tabId") this.tabLabels.delete(id);
     return changed;
   }
 
@@ -342,6 +370,7 @@ export class StateCache {
         status: entry.status,
         cwd: entry.cwd,
         title: entry.title,
+        tabLabel: this.tabLabels.get(entry.tabId) ?? null,
         tokens: { ...entry.tokens },
         stateChangeSeq: entry.stateChangeSeq,
         revision: entry.revision,
@@ -368,5 +397,9 @@ export class StateCache {
 
   workspaceLabel(workspaceId: string): string | null {
     return this.workspaceLabels.get(workspaceId) ?? null;
+  }
+
+  tabLabel(tabId: string): string | null {
+    return this.tabLabels.get(tabId) ?? null;
   }
 }

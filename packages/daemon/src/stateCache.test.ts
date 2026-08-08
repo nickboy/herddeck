@@ -34,7 +34,7 @@ function agent(
   };
 }
 
-function snapshot(panes: PaneInfo[], agents: AgentInfo[]): SessionSnapshot {
+function snapshot(panes: PaneInfo[], agents: AgentInfo[], tabs: unknown[] = []): SessionSnapshot {
   return {
     version: "0.8.0",
     protocol: 19,
@@ -42,7 +42,7 @@ function snapshot(panes: PaneInfo[], agents: AgentInfo[]): SessionSnapshot {
       { workspace_id: "ws-1", number: 1, label: "main", focused: true, agent_status: "idle" },
       { workspace_id: "ws-2", number: 2, label: null, focused: false, agent_status: "idle" },
     ],
-    tabs: [],
+    tabs,
     panes,
     layouts: [],
     agents,
@@ -377,7 +377,7 @@ describe("container close cascades", () => {
     expect(cache.workspaceLabel("w1")).toBeNull();
   });
 
-  test("tab_closed removes only that tab's panes", () => {
+  test("tab_closed removes only that tab's panes and drops its label", () => {
     const cache = new StateCache();
     cache.seedFromSnapshot({
       version: "0.8.0",
@@ -385,7 +385,10 @@ describe("container close cascades", () => {
       workspaces: [
         { workspace_id: "w1", number: 1, label: null, focused: true, agent_status: "idle" },
       ],
-      tabs: [],
+      tabs: [
+        { tab_id: "w1:t1", workspace_id: "w1", label: "Herddeck" },
+        { tab_id: "w1:t2", workspace_id: "w1", label: "Reviewer" },
+      ],
       layouts: [],
       panes: [
         {
@@ -407,6 +410,7 @@ describe("container close cascades", () => {
       ],
       agents: [],
     });
+    expect(cache.tabLabel("w1:t2")).toBe("Reviewer");
     expect(
       cache.applyEvent({
         event: "tab_closed",
@@ -414,5 +418,78 @@ describe("container close cascades", () => {
       }),
     ).toBe(true);
     expect(cache.paneIds()).toEqual(["w1:p1"]);
+    expect(cache.tabLabel("w1:t2")).toBeNull();
+    // The other tab's label is untouched.
+    expect(cache.tabLabel("w1:t1")).toBe("Herddeck");
+  });
+});
+
+describe("tab labels", () => {
+  test("seedFromSnapshot seeds tab labels from snap.tabs", () => {
+    const cache = new StateCache();
+    cache.seedFromSnapshot(
+      snapshot(
+        [pane("p1")],
+        [agent("p1", "working", 1)],
+        [
+          { tab_id: "tab-1", workspace_id: "ws-1", label: "Herddeck" },
+          { tab_id: "tab-2", workspace_id: "ws-1", label: null },
+        ],
+      ),
+    );
+    expect(cache.tabLabel("tab-1")).toBe("Herddeck");
+    expect(cache.tabLabel("tab-2")).toBeNull();
+    expect(cache.tabLabel("nope")).toBeNull();
+  });
+
+  test("tab_created upserts a label for a new tab (nested data.tab)", () => {
+    const cache = new StateCache();
+    cache.seedFromSnapshot(snapshot([pane("p1")], []));
+    expect(cache.tabLabel("tab-9")).toBeNull();
+    // Label changes don't affect agents(), so this returns false, same
+    // as applyWorkspaceUpsert.
+    expect(
+      cache.applyEvent({
+        event: "tab_created",
+        data: { type: "tab_created", tab: { tab_id: "tab-9", label: "Reviewer" } },
+      }),
+    ).toBe(false);
+    expect(cache.tabLabel("tab-9")).toBe("Reviewer");
+  });
+
+  test("tab_renamed updates an existing label; dotted and underscored spellings both apply", () => {
+    const cache = new StateCache();
+    cache.seedFromSnapshot(
+      snapshot([pane("p1")], [], [{ tab_id: "tab-1", workspace_id: "ws-1", label: "old" }]),
+    );
+
+    // Underscored spelling, flat data.
+    cache.applyEvent({ event: "tab_renamed", data: { tab_id: "tab-1", label: "Dotfiles" } });
+    expect(cache.tabLabel("tab-1")).toBe("Dotfiles");
+
+    // Dotted spelling, nested data.tab.
+    cache.applyEvent({
+      event: "tab.renamed",
+      data: { tab: { tab_id: "tab-1", label: "Terminal" } },
+    });
+    expect(cache.tabLabel("tab-1")).toBe("Terminal");
+  });
+
+  test("agents() carries tabLabel resolved from the cache", () => {
+    const cache = new StateCache();
+    cache.seedFromSnapshot(
+      snapshot(
+        [pane("p1")],
+        [agent("p1", "working", 1)],
+        [{ tab_id: "tab-1", workspace_id: "ws-1", label: "Herddeck" }],
+      ),
+    );
+    expect(cache.agents()[0]?.tabLabel).toBe("Herddeck");
+  });
+
+  test("agents() reports null tabLabel when the tab has none", () => {
+    const cache = new StateCache();
+    cache.seedFromSnapshot(snapshot([pane("p1")], [agent("p1", "working", 1)]));
+    expect(cache.agents()[0]?.tabLabel).toBeNull();
   });
 });

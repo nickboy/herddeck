@@ -90,6 +90,7 @@ function makeCachedAgent(overrides: Partial<CachedAgent> = {}): CachedAgent {
     status: "blocked",
     cwd: null,
     title: null,
+    tabLabel: null,
     tokens: {},
     stateChangeSeq: 1,
     revision: 1,
@@ -143,6 +144,7 @@ const sampleAgent: AgentSnapshot = {
   workspaceLabel: "main",
   cwd: null,
   title: null,
+  tabLabel: null,
   ctxPct: null,
   stateChangeSeq: 1,
 };

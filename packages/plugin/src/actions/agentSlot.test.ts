@@ -11,6 +11,7 @@ const makeAgent = (overrides: Partial<AgentSnapshot> = {}): AgentSnapshot => ({
   workspaceLabel: null,
   cwd: "/home/nick/project",
   title: null,
+  tabLabel: null,
   ctxPct: null,
   stateChangeSeq: 1,
   ...overrides,
@@ -83,8 +84,8 @@ describe("renderAgentSlotImage — SVG data URL", () => {
   });
 });
 
-describe("renderAgentSlot — title resolution (name > workspaceLabel > cwd basename)", () => {
-  test("falls back to cwd basename when name and workspaceLabel are null", () => {
+describe("renderAgentSlot — title resolution (name > tabLabel > workspaceLabel > cwd basename)", () => {
+  test("falls back to cwd basename when name, tabLabel, and workspaceLabel are null", () => {
     const r = renderAgentSlot(makeAgent({ cwd: "/home/nick/project" }), false, false);
     expect(r.displayName).toBe("project");
   });
@@ -98,9 +99,32 @@ describe("renderAgentSlot — title resolution (name > workspaceLabel > cwd base
     expect(r.displayName).toBe("main");
   });
 
-  test("prefers agent name over workspaceLabel and cwd basename", () => {
+  test("prefers tabLabel over workspaceLabel and cwd basename", () => {
     const r = renderAgentSlot(
-      makeAgent({ cwd: "/home/nick/project", workspaceLabel: "main", name: "builder" }),
+      makeAgent({ cwd: "/home/nick/project", workspaceLabel: "main", tabLabel: "Herddeck" }),
+      false,
+      false,
+    );
+    expect(r.displayName).toBe("Herddeck");
+  });
+
+  test("falls through to workspaceLabel when tabLabel is null", () => {
+    const r = renderAgentSlot(
+      makeAgent({ cwd: "/home/nick/project", workspaceLabel: "main", tabLabel: null }),
+      false,
+      false,
+    );
+    expect(r.displayName).toBe("main");
+  });
+
+  test("prefers agent name over tabLabel, workspaceLabel, and cwd basename", () => {
+    const r = renderAgentSlot(
+      makeAgent({
+        cwd: "/home/nick/project",
+        workspaceLabel: "main",
+        tabLabel: "Herddeck",
+        name: "builder",
+      }),
       false,
       false,
     );

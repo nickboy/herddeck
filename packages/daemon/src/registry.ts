@@ -221,6 +221,7 @@ export class SessionRegistry {
           workspaceLabel: rt.monitor.cache.workspaceLabel(a.workspaceId),
           cwd: a.cwd,
           title: a.title,
+          tabLabel: a.tabLabel,
           ctxPct: Number.isFinite(ctxPct) ? ctxPct : null,
           stateChangeSeq: a.stateChangeSeq,
         });

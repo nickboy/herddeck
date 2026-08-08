@@ -82,9 +82,11 @@ export function renderAgentSlot(
 
   const ctx = agent.ctxPct ?? undefined;
   const charBudget = ctx !== undefined ? TITLE_MAX_CHARS_WITH_CONTEXT : TITLE_MAX_CHARS;
-  // Title priority: herdr agent name, then the workspace label, then
-  // the cwd basename — see docs/CONTRACTS.md "Slot title".
-  const base = agent.name || agent.workspaceLabel || basename(agent.cwd ?? "") || "";
+  // Title priority: herdr agent name, then the tab label, then the
+  // workspace label, then the cwd basename — see docs/CONTRACTS.md
+  // "Slot title".
+  const base =
+    agent.name || agent.tabLabel || agent.workspaceLabel || basename(agent.cwd ?? "") || "";
   const truncated = truncate(base, charBudget);
   const displayName = focused ? `▸ ${truncated}` : truncated;
 
