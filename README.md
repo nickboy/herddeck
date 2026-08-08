@@ -44,15 +44,29 @@ plan Phases 2-3).
 ### Install
 
 ```bash
-git clone git@github.com:nickboy/herddeck.git
+git clone https://github.com/nickboy/herddeck.git
 cd herddeck
 ./install.sh
 ```
 
-`install.sh` installs dependencies, runs the test suite, and bootstraps
-the daemon as a `launchd` LaunchAgent (`bun packages/daemon/src/index.ts`,
-no `.app` bundle, no Accessibility/TCC — herdr's socket API replaces all
-of that; see `docs/CONTRACTS.md`).
+HTTPS on purpose: it needs no key setup, and `gh auth setup-git` makes
+pushes work non-interactively afterwards. Use the SSH remote only on a
+machine whose agent can sign without a prompt.
+
+`install.sh` installs dependencies, runs the test suite, builds the
+Stream Deck plugin bundle, and bootstraps the daemon as a `launchd`
+LaunchAgent (`bun packages/daemon/src/index.ts`, no `.app` bundle, no
+Accessibility/TCC — herdr's socket API replaces all of that; see
+`docs/CONTRACTS.md`).
+
+The plugin bundle's `bin/` and `images/` are build outputs, not
+committed — link the bundle only after `install.sh` (or
+`bun run --cwd packages/plugin build`) has generated them, or Stream
+Deck loads a plugin whose `CodePath` does not exist.
+
+The daemon needs a herdr server already running for its local target;
+it never starts one itself. Absent socket just means the target shows
+offline.
 
 Next, link the Stream Deck plugin:
 
