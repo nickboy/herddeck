@@ -8,6 +8,8 @@ import {
   EXPECTED_PROTOCOL,
   type ExecFn,
   LAUNCHD_LABEL,
+  SD_PLUGINS_ROOT,
+  SD_PLUGIN_DIR,
   buildLaunchAgentPlist,
   checkProtocolMatch,
   checkRemoteTunnel,
@@ -953,5 +955,80 @@ describe("herddeck install / uninstall", () => {
     expect(code).toBe(0);
     expect(existsSync(plistPath)).toBe(true);
     expect(io.err).toContain("label mismatch");
+  });
+});
+
+describe("herddeck plugin-install", () => {
+  function stagePlugin(repoRoot: string, withBuild: boolean): string {
+    const bundle = join(repoRoot, "packages", "plugin", SD_PLUGIN_DIR);
+    mkdirSync(join(bundle, "images"), { recursive: true });
+    writeFileSync(join(bundle, "manifest.json"), '{"UUID":"com.nickboy.herddeck"}');
+    writeFileSync(join(bundle, "HerdDeck.streamDeckProfile"), "zip");
+    if (withBuild) {
+      mkdirSync(join(bundle, "bin"), { recursive: true });
+      writeFileSync(join(bundle, "bin", "plugin.js"), "// built");
+    }
+    return bundle;
+  }
+
+  test("fails with a build hint when the bundle was never built", async () => {
+    const repoRoot = join(dir, "repo-unbuilt");
+    stagePlugin(repoRoot, false);
+    const io = captureOutput();
+    const code = await runCli(["plugin-install"], baseOpts({ repoRoot, home: dir }), io);
+    expect(code).toBe(1);
+    expect(io.err).toContain("not built");
+    expect(io.err).toContain("packages/plugin build");
+  });
+
+  test("copies the bundle into Stream Deck's Plugins dir and points at the profile", async () => {
+    const repoRoot = join(dir, "repo-built");
+    stagePlugin(repoRoot, true);
+    const calls: Array<{ cmd: string; args: readonly string[] }> = [];
+    // pgrep nonzero ⇒ Stream Deck isn't running, so no quit/relaunch.
+    const exec: ExecFn = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { stdout: "", stderr: "", exitCode: cmd === "pgrep" ? 1 : 0 };
+    };
+    const io = captureOutput();
+    const code = await runCli(["plugin-install"], baseOpts({ repoRoot, home: dir, exec }), io);
+    expect(code).toBe(0);
+
+    const dest = join(dir, SD_PLUGINS_ROOT, SD_PLUGIN_DIR);
+    expect(existsSync(join(dest, "bin", "plugin.js"))).toBe(true);
+    expect(existsSync(join(dest, "manifest.json"))).toBe(true);
+    expect(calls.map((c) => c.cmd)).toEqual(["pgrep"]);
+    expect(io.out).toContain("HerdDeck.streamDeckProfile");
+  });
+
+  test("quits and relaunches Stream Deck when it is running (it only scans at launch)", async () => {
+    const repoRoot = join(dir, "repo-running");
+    stagePlugin(repoRoot, true);
+    const calls: Array<{ cmd: string; args: readonly string[] }> = [];
+    const exec: ExecFn = async (cmd, args) => {
+      calls.push({ cmd, args });
+      return { stdout: "", stderr: "", exitCode: 0 };
+    };
+    const io = captureOutput();
+    const code = await runCli(["plugin-install"], baseOpts({ repoRoot, home: dir, exec }), io);
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.cmd)).toEqual(["pgrep", "osascript", "open"]);
+    expect(io.out).toContain("relaunched");
+  });
+
+  test("replaces a previously installed bundle instead of merging into it", async () => {
+    const repoRoot = join(dir, "repo-replace");
+    stagePlugin(repoRoot, true);
+    const dest = join(dir, SD_PLUGINS_ROOT, SD_PLUGIN_DIR);
+    mkdirSync(dest, { recursive: true });
+    writeFileSync(join(dest, "stale.js"), "old build artifact");
+    const exec: ExecFn = async () => ({ stdout: "", stderr: "", exitCode: 1 });
+    const code = await runCli(
+      ["plugin-install"],
+      baseOpts({ repoRoot, home: dir, exec }),
+      captureOutput(),
+    );
+    expect(code).toBe(0);
+    expect(existsSync(join(dest, "stale.js"))).toBe(false);
   });
 });

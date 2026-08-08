@@ -69,15 +69,23 @@ The daemon needs a herdr server already running for its local target;
 it never starts one itself. Absent socket just means the target shows
 offline.
 
-Next, link the Stream Deck plugin:
+Next, install the Stream Deck plugin:
 
 ```bash
-streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin
+herddeck plugin-install
 ```
 
-or double-click `packages/plugin/com.nickboy.herddeck.sdPlugin` in
-Finder to have Stream Deck.app install it directly. Once published,
-the plugin will also be available from the Elgato Marketplace.
+That copies the built bundle into Stream Deck's `Plugins` directory,
+quitting and relaunching the app so it rescans (Stream Deck only looks
+at launch). Note a `.sdPlugin` **directory** is not double-clickable —
+only a packed `.streamDeckPlugin` file is — so a plain copy is the
+honest install for a repo checkout. For live-reload development,
+`streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin` (Elgato
+CLI, after `streamdeck dev`) works too. Once published, the plugin will
+also be available from the Elgato Marketplace.
+
+The plugin supplies the *actions*; the profile below arranges them —
+you need both, and importing only the profile yields blank keys.
 
 Then import the pre-arranged MK.2 layout: double-click
 `packages/plugin/com.nickboy.herddeck.sdPlugin/HerdDeck.streamDeckProfile`

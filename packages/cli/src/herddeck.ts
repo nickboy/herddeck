@@ -12,7 +12,16 @@
 // re-derived here with small, deliberately minimal readers instead of
 // sharing daemon/src/config.ts's full TOML parser.
 
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { connect } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -916,8 +925,88 @@ Commands:
                         and bootstrap it via launchctl.
   uninstall              Reverse install: launchctl bootout + remove the
                         plist (only if it's ours).
+  plugin-install        Copy the built Stream Deck bundle into Stream
+                        Deck's Plugins directory (quitting/relaunching
+                        the app so it rescans), then print the profile
+                        path to import.
   help, --help, -h      This message.
 `;
+
+export const SD_PLUGIN_DIR = "com.nickboy.herddeck.sdPlugin";
+export const SD_PLUGINS_ROOT = join(
+  "Library",
+  "Application Support",
+  "com.elgato.StreamDeck",
+  "Plugins",
+);
+const SD_APP = "Elgato Stream Deck";
+
+export interface PluginInstallPaths {
+  /** Unpacked bundle inside the repo. */
+  source: string;
+  /** Where Stream Deck.app looks for plugins. */
+  dest: string;
+  /** Profile the user imports after the plugin is in place. */
+  profile: string;
+}
+
+export function pluginInstallPaths(opts: CliOptions): PluginInstallPaths {
+  const source = join(opts.repoRoot, "packages", "plugin", SD_PLUGIN_DIR);
+  return {
+    source,
+    dest: join(opts.home, SD_PLUGINS_ROOT, SD_PLUGIN_DIR),
+    profile: join(source, "HerdDeck.streamDeckProfile"),
+  };
+}
+
+/**
+ * Copy the unpacked plugin into Stream Deck's Plugins directory.
+ *
+ * A `.sdPlugin` DIRECTORY isn't double-clickable (only a packed
+ * `.streamDeckPlugin` file is), and Stream Deck only scans Plugins/ at
+ * launch — so the honest install is: quit, replace, relaunch.
+ */
+export async function runPluginInstall(opts: CliOptions, io: CliIO): Promise<number> {
+  const { source, dest, profile } = pluginInstallPaths(opts);
+
+  if (!existsSync(join(source, "bin", "plugin.js"))) {
+    io.stderr(
+      `herddeck: plugin bundle not built (${join(source, "bin", "plugin.js")} missing).\n  build it with: bun run --cwd packages/plugin build\n`,
+    );
+    return 1;
+  }
+
+  // Stream Deck holds the plugin process open; replacing files underneath
+  // a running app leaves it serving the old code.
+  const running = (await opts.exec("pgrep", ["-x", SD_APP])).exitCode === 0;
+  if (running) {
+    io.stdout("quitting Stream Deck…\n");
+    await opts.exec("osascript", ["-e", `quit app "${SD_APP}"`]);
+  }
+
+  mkdirSync(dirname(dest), { recursive: true });
+  rmSync(dest, { recursive: true, force: true });
+  cpSync(source, dest, { recursive: true });
+  io.stdout(`installed plugin: ${dest}\n`);
+
+  if (running) {
+    await opts.exec("open", ["-a", SD_APP]);
+    io.stdout("relaunched Stream Deck\n");
+  } else {
+    io.stdout(`start Stream Deck to load it: open -a "${SD_APP}"\n`);
+  }
+
+  io.stdout(
+    [
+      "",
+      "Next: import the key layout (the plugin supplies the actions, the",
+      "profile arranges them — you need both):",
+      `  open "${profile}"`,
+      "",
+    ].join("\n"),
+  );
+  return 0;
+}
 
 export async function runCli(
   argv: readonly string[],
@@ -953,6 +1042,8 @@ export async function runCli(
     }
     case "install":
       return runInstall(opts, io);
+    case "plugin-install":
+      return runPluginInstall(opts, io);
     case "uninstall":
       return runUninstall(opts, io);
     default:
