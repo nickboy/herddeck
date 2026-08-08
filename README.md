@@ -11,6 +11,17 @@ Code, Codex, OpenCode, …) works out of the box. Remote machines are
 reached by forwarding the remote `herdr.sock` over SSH — the daemon
 speaks one protocol to every target.
 
+![HerdDeck page 1 on a Stream Deck MK.2: five agent slots with live
+context donuts, answer keys, Wispr Flow, plan usage, and the navigation
+cluster](docs/images/stream-deck-page-1.png)
+
+Page 1, live against five agents on a remote machine. The top row is one
+key per agent — the ring is that session's context window, the tint is
+its lifecycle state (here the first slot is highlighted because it is
+working). The fifth slot has no ring because that pane has not been
+detected as an agent yet. Bottom right cycles the 5-hour and 7-day plan
+limits with their reset countdowns.
+
 ## Layout
 
 | Package | Purpose |
