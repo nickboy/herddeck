@@ -240,64 +240,6 @@ function makeBackoffTimers(): {
 }
 
 describe("PlanUsagePoller exponential backoff", () => {
-  test("consecutive errors escalate the interval 2× each tick (capped at 10 min)", async () => {
-    const timers = makeBackoffTimers();
-    const poller = new PlanUsagePoller({
-      fetcher: async () => ({ error: "HTTP 429" }),
-      intervalMs: 60_000, // 1 min base, mirrors production
-      clock: () => 0,
-      setIntervalImpl: timers.setIntervalImpl,
-      clearIntervalImpl: timers.clearIntervalImpl,
-    });
-    // EventEmitter throws an unhandled-error if `error` is emitted
-    // without a listener. Subscribe a noop so the test doesn't
-    // explode on the first emit.
-    poller.on("error", () => {});
-    poller.start();
-    // Initial start() armed at base interval before the immediate
-    // tick fired — the first tick is in flight and will update cadence.
-    await new Promise((r) => setTimeout(r, 0));
-    // Each failure raises the adaptive floor 1.5× as well as doubling
-    // for the consecutive-error count, so the gap grows faster than
-    // doubling alone: floor 90k × 2 = 180k.
-    expect(timers.intervals.at(-1)).toBe(180_000);
-    await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(540_000); // floor 135k × 4
-    // Cap at 10 min regardless of how the two multipliers compound.
-    await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(600_000);
-    await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(600_000); // stays capped
-  });
-
-  test("a single success does not undo a raised floor", async () => {
-    const timers = makeBackoffTimers();
-    let nthCall = 0;
-    const poller = new PlanUsagePoller({
-      fetcher: async () => {
-        nthCall += 1;
-        if (nthCall <= 2) return { error: "HTTP 429" };
-        return sampleSnapshot;
-      },
-      intervalMs: 60_000,
-      clock: () => 0,
-      setIntervalImpl: timers.setIntervalImpl,
-      clearIntervalImpl: timers.clearIntervalImpl,
-    });
-    poller.on("error", () => {});
-    poller.start();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(timers.intervals.at(-1)).toBe(180_000); // error 1: floor 90k × 2
-    await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(540_000); // error 2: floor 135k × 4
-    await timers.tickAll();
-    // Third tick succeeds. The consecutive-error multiplier clears, but
-    // the floor stays raised — this is the whole point. Live, the
-    // endpoint failed roughly one tick in three, and resetting to base
-    // on any success pinned the poller at the rate limit indefinitely.
-    expect(timers.intervals.at(-1)).toBe(135_000);
-  });
-
   test("zero errors keep the original interval (no spurious re-arm)", async () => {
     const timers = makeBackoffTimers();
     const poller = new PlanUsagePoller({
@@ -475,33 +417,6 @@ describe("rate-limit defences", () => {
     expect(calls).toBe(1);
   });
 
-  test("an interleaved failure rate still backs off", async () => {
-    // The live failure shape: roughly one tick in three returned 429,
-    // interleaved rather than in runs. Consecutive-error backoff alone
-    // collapsed on every success, so the cadence never left the rate
-    // limit. The adaptive floor has to survive the successes.
-    const timers = makeBackoffTimers();
-    let n = 0;
-    const poller = new PlanUsagePoller({
-      fetcher: async () => {
-        n += 1;
-        return n % 3 === 0 ? { error: "HTTP 429" } : sampleSnapshot;
-      },
-      intervalMs: 60_000,
-      clock: () => 0,
-      setIntervalImpl: timers.setIntervalImpl,
-      clearIntervalImpl: timers.clearIntervalImpl,
-    });
-    poller.on("error", () => {});
-    poller.start();
-    await new Promise((r) => setTimeout(r, 0));
-    for (let i = 0; i < 9; i++) await timers.tickAll();
-
-    // Pre-fix this sat at the 60s base forever, because two successes
-    // out of every three reset it.
-    expect(timers.intervals.at(-1)).toBeGreaterThan(60_000);
-  });
-
   test("a sustained clean streak earns the floor back", async () => {
     const timers = makeBackoffTimers();
     let n = 0;
@@ -525,5 +440,150 @@ describe("rate-limit defences", () => {
     // slower than the raise.
     for (let i = 0; i < 6; i++) await timers.tickAll();
     expect(timers.intervals.at(-1)).toBe(60_000);
+  });
+});
+
+describe("cadence policy", () => {
+  const PROD_BASE = 5 * 60_000;
+  // maxBackoff = max(10 min, base * 8). At the 300s base that is 40 min,
+  // which restores the ladder shape the design had at 60s. A fixed
+  // 10-minute ceiling gave exactly one doubling at 300s.
+  const PROD_CAP = PROD_BASE * 8;
+
+  test("escalates 2x per consecutive error, capped relative to the base", async () => {
+    const timers = makeBackoffTimers();
+    const poller = new PlanUsagePoller({
+      fetcher: async () => ({ error: "fetch failed: network" }),
+      intervalMs: PROD_BASE,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(timers.intervals.at(-1)).toBe(PROD_BASE * 2);
+    await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(PROD_BASE * 4);
+    await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(PROD_CAP);
+    await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(PROD_CAP); // stays capped
+  });
+
+  test("one success returns to the base interval", async () => {
+    // Deliberate: a success means the endpoint is serving us. Throttling
+    // is handled by Retry-After, not by refusing to believe a success.
+    const timers = makeBackoffTimers();
+    let n = 0;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        n += 1;
+        return n <= 2 ? { error: "fetch failed: network" } : sampleSnapshot;
+      },
+      intervalMs: PROD_BASE,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(PROD_BASE * 4);
+    await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(PROD_BASE);
+  });
+
+  test("obeys Retry-After when the server supplies one", async () => {
+    // Anthropic states the correct wait. Obeying it beats any heuristic
+    // that guesses — and it is the only signal that actually knows.
+    const timers = makeBackoffTimers();
+    const poller = new PlanUsagePoller({
+      fetcher: async () => ({ error: "HTTP 429", retryAfterMs: 17 * 60_000 }),
+      intervalMs: PROD_BASE,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(timers.intervals.at(-1)).toBe(17 * 60_000);
+  });
+
+  test("clamps Retry-After to the base below and the cap above", async () => {
+    for (const [retryAfterMs, expected] of [
+      [1_000, PROD_BASE], // nothing here needs sub-interval freshness
+      [99 * 60_000, PROD_CAP],
+    ] as const) {
+      const timers = makeBackoffTimers();
+      const poller = new PlanUsagePoller({
+        fetcher: async () => ({ error: "HTTP 429", retryAfterMs }),
+        intervalMs: PROD_BASE,
+        clock: () => 0,
+        setIntervalImpl: timers.setIntervalImpl,
+        clearIntervalImpl: timers.clearIntervalImpl,
+      });
+      poller.on("error", () => {});
+      poller.start();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(timers.intervals.at(-1)).toBe(expected);
+    }
+  });
+
+  test("a stale Retry-After never outlives its response", async () => {
+    // The hint is consumed by one cadence update and cleared. A later
+    // failure with no header must fall back to plain backoff rather than
+    // reusing a number from a previous response.
+    const timers = makeBackoffTimers();
+    let n = 0;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        n += 1;
+        return n === 1
+          ? { error: "HTTP 429", retryAfterMs: 20 * 60_000 }
+          : { error: "keychain read failed: denied" };
+      },
+      intervalMs: PROD_BASE,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(timers.intervals.at(-1)).toBe(20 * 60_000);
+    await timers.tickAll();
+    // Plain backoff from base, not the remembered 20 minutes.
+    expect(timers.intervals.at(-1)).toBe(PROD_BASE * 2);
+  });
+
+  test("an expired token does not pin the cadence", async () => {
+    // The deleted adaptive floor raised on every error kind, so a 401
+    // overnight left the poller at its ceiling long after the user had
+    // re-authenticated. Auth failure is an outage, not a rate limit.
+    const timers = makeBackoffTimers();
+    let n = 0;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        n += 1;
+        return n <= 3 ? { error: "access token expired or invalid" } : sampleSnapshot;
+      },
+      intervalMs: PROD_BASE,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    await timers.tickAll();
+    await timers.tickAll();
+    // First poll after `claude login` succeeds and the cadence is normal
+    // again immediately — no clean-streak debt to work off.
+    await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(PROD_BASE);
   });
 });
