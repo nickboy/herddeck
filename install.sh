@@ -10,6 +10,20 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Installing the Stream Deck plugin quits and relaunches the Stream Deck
+# app (it only scans Plugins/ at launch). That is the right default —
+# leaving it out is exactly the half-install that ships a fresh daemon
+# against a stale plugin — but it is a visible side effect, so there is
+# a way out for anyone driving this from a script.
+INSTALL_PLUGIN=1
+FORWARD_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --no-plugin) INSTALL_PLUGIN=0 ;;
+    *) FORWARD_ARGS+=("$arg") ;;
+  esac
+done
+
 if ! command -v bun >/dev/null 2>&1; then
   echo "herddeck: bun is required (>= 1.2)." >&2
   echo "  Install with: brew install oven-sh/bun/bun" >&2
@@ -49,18 +63,31 @@ else
 fi
 
 echo "herddeck: bootstrapping daemon LaunchAgent..."
-bun "$REPO_ROOT/packages/cli/src/herddeck.ts" install "$@"
+bun "$REPO_ROOT/packages/cli/src/herddeck.ts" install ${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}
 
-cat <<'EOF'
+if [ "$INSTALL_PLUGIN" = 1 ]; then
+  echo "herddeck: installing the Stream Deck plugin..."
+  bun "$REPO_ROOT/packages/cli/src/herddeck.ts" plugin-install
+fi
+
+cat <<EOF
 
 herddeck installed.
 
-Next steps:
-  1. Health check:      herddeck doctor
-  2. Inspect targets:   herddeck status
-  3. Install the Stream Deck plugin (packages/plugin, SDK v2) — via the
-     Elgato Marketplace once published, or for local dev:
-       streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin
-     (see packages/plugin/README.md).
-
+  Health check:    herddeck doctor
+  Inspect targets: herddeck status
 EOF
+
+if [ "$INSTALL_PLUGIN" = 1 ]; then
+  cat <<EOF
+  Key layout:      open "$REPO_ROOT/packages/plugin/com.nickboy.herddeck.sdPlugin/HerdDeck.streamDeckProfile"
+
+The plugin supplies the actions; the profile arranges them into pages —
+import it once and the deck is done.
+EOF
+else
+  cat <<'EOF'
+  Stream Deck:     herddeck plugin-install   (skipped: --no-plugin)
+EOF
+fi
+echo

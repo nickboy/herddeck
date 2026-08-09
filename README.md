@@ -151,53 +151,37 @@ cd herddeck
 ./install.sh
 ```
 
-HTTPS on purpose: it needs no key setup, and `gh auth setup-git` makes
-pushes work non-interactively afterwards. Use the SSH remote only on a
-machine whose agent can sign without a prompt.
+That is the whole install. It resolves dependencies, runs the test
+suite, builds the Stream Deck plugin bundle, links the `herddeck` CLI
+and the two reporter scripts into `~/.local/bin`, bootstraps the daemon
+as a `launchd` LaunchAgent, and installs the plugin into Stream Deck —
+quitting and relaunching the app, because Stream Deck only scans its
+`Plugins/` directory at launch.
 
-`install.sh` installs dependencies, runs the test suite, builds the
-Stream Deck plugin bundle, links the `herddeck` CLI into
-`~/.local/bin`, and bootstraps the daemon as a `launchd`
-LaunchAgent (`bun packages/daemon/src/index.ts`, no `.app` bundle, no
-Accessibility/TCC — herdr's socket API replaces all of that; see
-`docs/CONTRACTS.md`).
+Re-run the same command to upgrade. Nothing else needs remembering:
+running only part of it is the failure mode this replaced, where a
+freshly-pulled daemon ends up paired with a stale plugin and keys stop
+responding for no visible reason.
 
-The plugin bundle's `bin/` and `images/` are build outputs, not
-committed — link the bundle only after `install.sh` (or
-`bun run --cwd packages/plugin build`) has generated them, or Stream
-Deck loads a plugin whose `CodePath` does not exist.
+Pass `--no-plugin` to skip the Stream Deck half (useful on a machine
+that runs agents but no deck, and in scripts that must not disturb a
+running app).
 
-The daemon needs a herdr server already running for its local target;
-it never starts one itself. Absent socket just means the target shows
-offline.
-
-Next, install the Stream Deck plugin:
+The one manual step left is importing the key layout, printed at the end
+of the install:
 
 ```bash
-herddeck plugin-install
+open packages/plugin/com.nickboy.herddeck.sdPlugin/HerdDeck.streamDeckProfile
 ```
 
-That copies the built bundle into Stream Deck's `Plugins` directory,
-quitting and relaunching the app so it rescans (Stream Deck only looks
-at launch). Note a `.sdPlugin` **directory** is not double-clickable —
-only a packed `.streamDeckPlugin` file is — so a plain copy is the
-honest install for a repo checkout. For live-reload development,
-`streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin` (Elgato
-CLI, after `streamdeck dev`) works too. Once published, the plugin will
-also be available from the Elgato Marketplace.
+The plugin supplies the *actions*; the profile arranges them into pages.
+You need both — importing only the profile yields blank keys. Page 1
+mirrors ClaudeDeck's proven layout: five agent slots on top, answer keys
+plus Wispr Flow and plan usage in the middle, the arrows/Enter cluster at
+the bottom. Page 2 holds the herdr-native keys (worktree, canned prompt,
+target switcher, slot paging).
 
-The plugin supplies the *actions*; the profile below arranges them —
-you need both, and importing only the profile yields blank keys.
-
-Then import the pre-arranged MK.2 layout: double-click
-`packages/plugin/com.nickboy.herddeck.sdPlugin/HerdDeck.streamDeckProfile`
-(regenerate with `bun packages/plugin/scripts/generateProfile.ts`).
-Page 1 mirrors ClaudeDeck's proven layout — five agent slots on top,
-answer keys + Wispr Flow + Plan Usage in the middle, arrows/Enter nav
-cluster at the bottom. Page 2 holds the herdr-native keys (worktree,
-canned prompt, target switcher, slot paging).
-
-Then verify everything is wired up:
+Then verify:
 
 ```bash
 herddeck doctor
@@ -206,9 +190,22 @@ herddeck doctor
 `doctor` checks herdr is on `PATH` with a matching protocol version, the
 local herdr socket exists with sane permissions, the daemon's `/health`
 endpoint responds, the `launchd` job is loaded, `~/.herddeck/run/` has
-0700 permissions, and (per remote target) an SSH reachability
-pre-check plus a `ping` probe through its tunnel socket rather than
-trusting the socket file's mere existence — see "Remote targets" below.
+0700 permissions, and (per remote target) an SSH reachability pre-check
+plus a `ping` probe through its tunnel socket rather than trusting the
+socket file's mere existence — see "Remote targets" below.
+
+The daemon needs a herdr server already running for its local target; it
+never starts one itself. An absent socket just means the target shows
+offline.
+
+HTTPS clone on purpose: it needs no key setup, and `gh auth setup-git`
+makes pushes work non-interactively afterwards. Use the SSH remote only
+on a machine whose agent can sign without a prompt.
+
+For live-reload plugin development,
+`streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin` (Elgato
+CLI, after `streamdeck dev`) works too. Once published, the plugin will
+also be available from the Elgato Marketplace.
 
 ### Configuration
 
