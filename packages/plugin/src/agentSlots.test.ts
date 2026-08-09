@@ -11,6 +11,7 @@ const makeAgent = (
   paneId,
   name: null,
   agentKind: "claude",
+  focused: false,
   status: "idle",
   workspaceLabel: null,
   cwd: `/tmp/${paneId}`,
@@ -320,5 +321,61 @@ describe("slotFromCoordinates", () => {
 
   test("undefined coordinates returns undefined", () => {
     expect(slotFromCoordinates(undefined)).toBeUndefined();
+  });
+});
+
+describe("routing keys before any slot is pressed", () => {
+  // Answer/arrow/Enter keys act on getFocusedAgent(). With nothing
+  // pressed it used to return undefined, so every one of those keys was
+  // inert after a restart — dictating a prompt and reaching for Enter
+  // flashed an alert and dropped the keystroke, with no hint that a slot
+  // press was the missing step.
+  test("falls back to the pane herdr reports as focused", () => {
+    const m = new AgentSlotManager();
+    m.setAgents([
+      makeAgent("local", "p1"),
+      makeAgent("local", "p2", { focused: true }),
+      makeAgent("local", "p3"),
+    ]);
+    expect(m.getFocused()).toBeUndefined();
+    expect(m.getFocusedAgent()?.paneId).toBe("p2");
+  });
+
+  test("an explicit slot press outranks herdr's focus", () => {
+    const m = new AgentSlotManager();
+    m.setAgents([makeAgent("local", "p1"), makeAgent("local", "p2", { focused: true })]);
+    m.setFocused({ target: "local", paneId: "p1" });
+    expect(m.getFocusedAgent()?.paneId).toBe("p1");
+  });
+
+  test("returns nothing when no pane is focused", () => {
+    const m = new AgentSlotManager();
+    m.setAgents([makeAgent("local", "p1"), makeAgent("local", "p2")]);
+    expect(m.getFocusedAgent()).toBeUndefined();
+  });
+
+  test("returns nothing when two targets each claim a focused pane", () => {
+    // Each herdr server tracks its own focus, so a multi-target deck can
+    // see two. Guessing would submit into whichever sorted first —
+    // sending Enter to the wrong agent submits someone else's prompt, so
+    // the ambiguous case must stay inert.
+    const m = new AgentSlotManager();
+    m.setAgents([
+      makeAgent("local", "p1", { focused: true }),
+      makeAgent("workbox", "p9", { focused: true }),
+    ]);
+    expect(m.getFocusedAgent()).toBeUndefined();
+  });
+
+  test("the fallback survives paging away from the focused slot", () => {
+    // Paging deliberately does not touch focus, and the fallback is
+    // read from the full agent list rather than the visible page.
+    const m = new AgentSlotManager();
+    m.setAgents([
+      ...Array.from({ length: 5 }, (_, i) => makeAgent("local", `p${i}`)),
+      makeAgent("local", "p9", { focused: true }),
+    ]);
+    m.nextPage();
+    expect(m.getFocusedAgent()?.paneId).toBe("p9");
   });
 });

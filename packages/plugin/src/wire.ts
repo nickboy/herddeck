@@ -22,7 +22,10 @@ export interface AgentSnapshot {
   cwd: string | null;
   title: string | null; // terminal_title_stripped
   tabLabel: string | null; // herdr tab label if set
-  ctxPct: number | null; // AgentInfo.tokens.ctx_pct, parsed
+  ctxPct: number | null;
+  /** herdr's own focus — the pane the user is looking at. Lets the
+   * answer/arrow/Enter keys route before any slot has been pressed. */
+  focused: boolean; // AgentInfo.tokens.ctx_pct, parsed
   stateChangeSeq: number;
 }
 

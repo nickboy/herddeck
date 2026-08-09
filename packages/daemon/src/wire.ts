@@ -17,6 +17,9 @@ export interface AgentSnapshot {
   title: string | null;
   tabLabel: string | null;
   ctxPct: number | null;
+  /** herdr's own focus — the pane the user is looking at. Lets the
+   * plugin route keys sensibly before any slot has been pressed. */
+  focused: boolean;
   stateChangeSeq: number;
 }
 

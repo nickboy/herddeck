@@ -19,6 +19,8 @@ export interface CachedAgent {
   title: string | null;
   tabLabel: string | null;
   tokens: Record<string, string>;
+  /** herdr's own notion of the pane the user is looking at. */
+  focused: boolean;
   stateChangeSeq: number;
   revision: number;
 }
@@ -36,6 +38,7 @@ interface PaneEntry {
   status: AgentStatus;
   title: string | null;
   tokens: Record<string, string>;
+  focused: boolean;
   stateChangeSeq: number;
 }
 
@@ -112,6 +115,7 @@ export class StateCache {
         status: pane.agent_status,
         title: null,
         tokens: {},
+        focused: pane.focused === true,
         stateChangeSeq: 0,
       });
     }
@@ -160,6 +164,8 @@ export class StateCache {
         return this.applyAgentDetected(data, opts);
       case "pane_agent_status_changed":
         return this.applyStatusChanged(data, opts);
+      case "pane_focused":
+        return this.applyPaneFocused(data);
       case "workspace_created":
       case "workspace_renamed":
         return this.applyWorkspaceUpsert(data);
@@ -173,6 +179,29 @@ export class StateCache {
       default:
         return false;
     }
+  }
+
+  /**
+   * herdr focus moved. The event names exactly one pane, so focus is
+   * set there and cleared everywhere else.
+   *
+   * Idempotent on purpose: `pane_focused` is chatty — a fresh
+   * subscription replays it for existing panes, and ~20 arrived in 3.5s
+   * on a busy session — so re-announcing the pane that is already
+   * focused must return false and not wake the Stream Deck.
+   */
+  private applyPaneFocused(data: Record<string, unknown>): boolean {
+    const paneId = asStr(paneField(data, "pane_id"));
+    if (!paneId || !this.panes.has(paneId)) return false;
+    let changed = false;
+    for (const entry of this.panes.values()) {
+      const next = entry.paneId === paneId;
+      if (entry.focused !== next) {
+        entry.focused = next;
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private applyWorkspaceUpsert(data: Record<string, unknown>): boolean {
@@ -250,6 +279,8 @@ export class StateCache {
       status: "unknown",
       title: null,
       tokens: {},
+      // A newly created pane is not focused until herdr says so.
+      focused: false,
       stateChangeSeq: 0,
     });
     return true;
@@ -388,6 +419,19 @@ export class StateCache {
    */
   mergeTokensFromSnapshot(snap: SessionSnapshot): boolean {
     let changed = false;
+    // Focus rides along: it DOES have a push path (pane_focused), but a
+    // dropped event would otherwise leave keys routing to a pane the
+    // user stopped looking at until the next focus change. Re-reading
+    // it on the same timer makes that self-heal.
+    for (const pane of snap.panes) {
+      const entry = this.panes.get(pane.pane_id);
+      if (!entry) continue;
+      const next = pane.focused === true;
+      if (entry.focused !== next) {
+        entry.focused = next;
+        changed = true;
+      }
+    }
     for (const agent of snap.agents) {
       const entry = this.panes.get(agent.pane_id);
       if (!entry) continue;
@@ -414,6 +458,7 @@ export class StateCache {
         title: entry.title,
         tabLabel: this.tabLabels.get(entry.tabId) ?? null,
         tokens: { ...entry.tokens },
+        focused: entry.focused,
         stateChangeSeq: entry.stateChangeSeq,
         revision: entry.revision,
       });

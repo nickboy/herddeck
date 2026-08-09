@@ -13,6 +13,7 @@ const makeAgent = (overrides: Partial<AgentSnapshot> = {}): AgentSnapshot => ({
   paneId: "p1",
   name: null,
   agentKind: "claude",
+  focused: false,
   status: "idle",
   workspaceLabel: null,
   cwd: "/home/nick/project",
