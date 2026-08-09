@@ -896,10 +896,10 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
       `  logs:          ${logPath}`,
       "  check health:  herddeck doctor",
       "  inspect state: herddeck status",
-      "",
-      "Next: install the Stream Deck plugin (packages/plugin, SDK v2) via",
-      "the Elgato Marketplace or `streamdeck link packages/plugin/com.nickboy.herddeck.sdPlugin`",
-      "— see packages/plugin/README.md once the plugin ships.",
+      // Deliberately silent about the Stream Deck half: install.sh runs
+      // `plugin-install` right after this and prints the one remaining
+      // step. Repeating it here sent people off to do by hand what had
+      // already happened.
       "",
     ].join("\n"),
   );
