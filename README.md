@@ -33,6 +33,9 @@ limits with their reset countdowns.
 
 Development plan and phase results live in `docs/plans/`. CI checks and
 branch protection are documented in `docs/ci.md`.
+[`docs/engineering-notes.md`](docs/engineering-notes.md) is the write-up:
+what the protocol actually does, the bugs only live execution found, and
+the options that were rejected and why.
 
 ## Status
 

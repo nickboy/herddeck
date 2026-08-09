@@ -9,7 +9,9 @@ import type { PlanUsageSnapshot } from "./planTypes";
  * Kept on the type so older fetchers (or tests) that read it don't
  * break, but new callers should pass an empty string.
  */
-export type PlanFetcher = (cookie: string) => Promise<PlanUsageSnapshot | { error: string }>;
+export type PlanFetcher = (
+  cookie: string,
+) => Promise<PlanUsageSnapshot | { error: string; retryAfterMs?: number }>;
 
 type SetIntervalImpl = (fn: () => void, ms: number) => ReturnType<typeof setInterval>;
 type ClearIntervalImpl = (handle: ReturnType<typeof setInterval>) => void;
@@ -21,13 +23,16 @@ export interface PlanUsagePollerOptions {
   setIntervalImpl?: SetIntervalImpl;
   clearIntervalImpl?: ClearIntervalImpl;
   /**
-   * Returns the last instant (`clock()` units) that Claude Code's
-   * statusline channel delivered a parsable `rate_limits` snapshot.
-   * Returns 0 when the daemon has never seen one. When the gate sees a
-   * value newer than `STATUSLINE_FRESH_MS` ago, `tick()` short-circuits
-   * before hitting Anthropic — the push channel is the source of truth
-   * for active Claude sessions. Defaults to `() => 0` (gate disabled,
-   * fall back to legacy unconditional polling).
+   * Returns the last instant (`clock()` units) that a statusline channel
+   * delivered a parsable `rate_limits` snapshot; 0 when never.
+   *
+   * NOTHING POPULATES THIS TODAY. The channel does not exist: the
+   * bundled statusline reports per-pane context to herdr, not
+   * account-scoped plan usage, and it is not established that Claude
+   * Code's statusline payload carries plan windows at all. The seam is
+   * kept because it is the right shape if that channel is ever built —
+   * but read this as an intention, not a defence the poller currently
+   * has. `index.ts` does not pass it, so the gate has never once fired.
    */
   getLastStatuslineAt?: () => number;
   /**
@@ -51,11 +56,16 @@ export interface PlanUsagePollerOptions {
  *   - `setIntervalImpl` / `clearIntervalImpl` — so tests don't need real time.
  *   - `clock` — for deterministic `fetchedAt` stamping by fetchers that want it.
  *
- * Error policy: emit `error` and keep polling, with exponential
- * backoff on consecutive failures so HTTP 429 (Anthropic
- * rate-limiting) doesn't keep hammering at the configured interval.
- * Backoff escalates 2× per consecutive error capped at MAX_BACKOFF_MS
- * (10 min); a successful tick resets to the base interval.
+ * Error policy: emit `error` and keep polling. Two distinct mechanisms,
+ * because "the service is down" and "we are asking too often" are
+ * different problems:
+ *
+ *   - consecutive-error backoff, for outages: 2x per consecutive error,
+ *     cleared by any success.
+ *   - an adaptive floor, for sustained throttling: raised by every
+ *     failure, lowered only by a run of clean ticks. A single success
+ *     does NOT restore the base interval, because the 429s this exists
+ *     for arrive interleaved rather than in runs.
  */
 export class PlanUsagePoller extends EventEmitter {
   private readonly fetcher: PlanFetcher;
@@ -69,36 +79,17 @@ export class PlanUsagePoller extends EventEmitter {
   private running = false;
   private consecutiveErrors = 0;
   private currentIntervalMs = 0;
-  /**
-   * Adaptive floor for the polling cadence, at or above the configured
-   * interval.
-   *
-   * Consecutive-error backoff cannot fix steady-state throttling, and
-   * this endpoint produced exactly that: 1136 successes against 543
-   * HTTP 429s, arriving interleaved rather than in runs. One success
-   * reset the counter, so the cadence oscillated between the base
-   * interval and one doubling — forever, permanently at the ceiling,
-   * with `errors=1` logged 492 times and `errors=4` only 5.
-   *
-   * Backoff answers "the service is down". This answers "we are asking
-   * too often", which is a different question: every 429 raises the
-   * floor, and only a sustained clean streak lowers it again.
-   */
-  private floorMs: number;
-  private cleanStreak = 0;
+  private readonly maxBackoffMs: number;
+  /** Set from a 429/503 `Retry-After`; consumed by the next cadence
+   * update and cleared, so a stale hint can never outlive its response. */
+  private retryAfterMs: number | undefined;
 
   /**
    * Cap on the exponential backoff so we never go more than 10 min
    * between attempts. Aligns with "if you're rate-limited for >10 min
    * something else is wrong; let the user notice in daemon.log."
    */
-  private static readonly MAX_BACKOFF_MS = 10 * 60_000;
-
-  /** Multiplicative step for the adaptive floor, and how many clean
-   * ticks it takes to earn a step back down. Deliberately asymmetric:
-   * back off fast, recover slowly. */
-  private static readonly FLOOR_STEP = 1.5;
-  private static readonly CLEAN_STREAK_TO_RECOVER = 5;
+  private static readonly MAX_BACKOFF_FLOOR_MS = 10 * 60_000;
 
   /**
    * Skip the fetch when the statusline channel delivered a snapshot
@@ -118,7 +109,10 @@ export class PlanUsagePoller extends EventEmitter {
     this.clock = opts.clock ?? Date.now;
     this.getLastStatuslineAt = opts.getLastStatuslineAt ?? (() => 0);
     this.hasViewer = opts.hasViewer ?? (() => true);
-    this.floorMs = opts.intervalMs;
+    // The cap has to scale off the base or the ladder degenerates. At a
+    // 300s base a fixed 10-minute ceiling allows exactly one doubling;
+    // 8x reproduces the shape the design had at 60s (60→120→240→480).
+    this.maxBackoffMs = Math.max(PlanUsagePoller.MAX_BACKOFF_FLOOR_MS, opts.intervalMs * 8);
   }
 
   start(): void {
@@ -160,50 +154,69 @@ export class PlanUsagePoller extends EventEmitter {
    * interval if it changed. Centralised so the success and error
    * paths can't drift in the next-interval math.
    */
+  /**
+   * Recompute the cadence after success/failure and re-arm the interval
+   * if it changed.
+   *
+   * Three cases, and the ordering matters:
+   *
+   *   success                    -> base interval
+   *   throttled, server timed it -> obey Retry-After, clamped
+   *   anything else              -> 2x consecutive-error backoff
+   *
+   * An earlier version carried an adaptive floor that every failure
+   * raised and only a run of clean ticks lowered. It was deleted rather
+   * than tuned. It was measured against a 60s interval and shipped
+   * alongside a change to 300s, where `maxBackoff / base` is 2 and one
+   * floor step is 1.5 — so the first failure already exceeded the cap
+   * and the consecutive-error term never affected an outcome. It also
+   * raised the floor on failures that have nothing to do with request
+   * rate: an expired OAuth token pinned the cadence at the ceiling, and
+   * kept it there for tens of minutes after the user re-authenticated.
+   *
+   * Anthropic states the correct wait in `Retry-After`. Obeying the
+   * server beats any heuristic that guesses at it.
+   */
   private updateCadence(success: boolean): void {
     const previousMs = this.currentIntervalMs;
+    const retryAfterMs = this.retryAfterMs;
+    this.retryAfterMs = undefined;
+
     if (success) {
       this.consecutiveErrors = 0;
-      this.cleanStreak += 1;
-      // Earn the floor back only after a run of clean ticks, so an
-      // interleaved 2-in-3 success rate cannot undo a raise.
-      if (this.cleanStreak >= PlanUsagePoller.CLEAN_STREAK_TO_RECOVER) {
-        this.cleanStreak = 0;
-        this.floorMs = Math.max(this.intervalMs, this.floorMs / PlanUsagePoller.FLOOR_STEP);
-      }
-      this.currentIntervalMs = this.floorMs;
+      this.currentIntervalMs = this.intervalMs;
+    } else if (retryAfterMs !== undefined) {
+      // Never poll sooner than the base interval even if the server says
+      // we may — nothing on this key needs sub-interval freshness.
+      this.consecutiveErrors = 0;
+      this.currentIntervalMs = Math.min(Math.max(retryAfterMs, this.intervalMs), this.maxBackoffMs);
     } else {
       this.consecutiveErrors += 1;
-      this.cleanStreak = 0;
-      // Any failure means we are asking too often — raise the floor,
-      // not just this one gap.
-      this.floorMs = Math.min(
-        this.floorMs * PlanUsagePoller.FLOOR_STEP,
-        PlanUsagePoller.MAX_BACKOFF_MS,
-      );
-      // 1× → 2× → 4× → 8× ... capped. Math.min on the cap so we never
-      // exceed MAX_BACKOFF_MS even if consecutiveErrors gets large.
       const factor = 2 ** Math.min(this.consecutiveErrors, 20);
-      this.currentIntervalMs = Math.min(this.floorMs * factor, PlanUsagePoller.MAX_BACKOFF_MS);
+      this.currentIntervalMs = Math.min(this.intervalMs * factor, this.maxBackoffMs);
     }
+
     if (this.currentIntervalMs !== previousMs) {
+      const hint = retryAfterMs !== undefined ? ` (retry-after ${retryAfterMs}ms)` : "";
       logInfo(
-        `plan poller backoff: errors=${this.consecutiveErrors} nextTickMs=${this.currentIntervalMs}`,
+        `plan poller cadence: errors=${this.consecutiveErrors} nextTickMs=${this.currentIntervalMs}${hint}`,
       );
       this.scheduleNext();
     }
   }
 
   private async tick(): Promise<void> {
-    // Freshness gate: skip the Anthropic API hit entirely when the
-    // statusline push channel delivered a snapshot recently. Keeps
-    // the poller available as a fallback (no Claude session active,
-    // or daemon just booted) but avoids the rate-limited endpoint
-    // during normal interactive use.
+    // Viewer gate: nobody has the Plan Usage key on screen, so there is
+    // nothing to render and no reason to spend a request. Deliberately
+    // returns without touching updateCadence — a skipped tick is
+    // evidence of neither success nor throttling, and counting it as
+    // clean would let a headless daemon walk its floor back down
+    // without issuing a single request.
     if (!this.hasViewer()) {
       logInfo("plan poll skipped — no plugin connected");
       return;
     }
+    // Freshness gate — inert in production; see getLastStatuslineAt.
     const lastStatusline = this.getLastStatuslineAt();
     if (lastStatusline > 0) {
       const age = this.clock() - lastStatusline;
@@ -218,6 +231,7 @@ export class PlanUsagePoller extends EventEmitter {
       // legacy fetchers that consumed this value have been removed.
       const result = await this.fetcher("");
       if ("error" in result) {
+        this.retryAfterMs = result.retryAfterMs;
         logInfo(`plan:error reason=${result.error}`);
         this.emit("error", result.error);
         this.updateCadence(false);

@@ -524,3 +524,71 @@ describe("token auth", () => {
     wsGood.close();
   });
 });
+
+describe("replaying plan usage to a reconnecting plugin", () => {
+  const planSnapshot = {
+    metrics: [{ key: "fiveHour", label: "5h session", percentUsed: 42, resetAt: null }],
+    fetchedAt: 0,
+  } as unknown as Parameters<typeof JSON.stringify>[0];
+
+  test("a plugin connecting after a poll gets the last snapshot", async () => {
+    // Stream Deck restarts are routine — plugin reload, app update,
+    // display wake. Targets and agents were already replayed on connect;
+    // plan was not, so the key painted its placeholder and held it until
+    // the next poll: up to 5 minutes, or 10 backed off. Replay costs no
+    // API call.
+    const { deps } = makeDeps(makeRegistry({}));
+    server = new DeckServer(deps);
+    const p = nextPort();
+    server.start(p);
+    server.broadcast({ type: "plan:update", snapshot: planSnapshot } as unknown as WsEvent);
+
+    const { ws, received } = await connectClient(p);
+    sockets.push(ws);
+    await waitUntil(() => received.some((e) => e.type === "plan:update"));
+    const replayed = received.find((e) => e.type === "plan:update");
+    expect(replayed).toBeDefined();
+    expect(replayed).toMatchObject({ type: "plan:update", snapshot: planSnapshot });
+  });
+
+  test("a stale error is replayed too — it explains a blank key", async () => {
+    const { deps } = makeDeps(makeRegistry({}));
+    server = new DeckServer(deps);
+    const p = nextPort();
+    server.start(p);
+    server.broadcast({ type: "plan:error", reason: "HTTP 429" });
+
+    const { ws, received } = await connectClient(p);
+    sockets.push(ws);
+    await waitUntil(() => received.some((e) => e.type === "plan:error"));
+    const replayed = received.find((e) => e.type === "plan:error");
+    expect(replayed).toBeDefined();
+    expect(replayed).toMatchObject({ type: "plan:error", reason: "HTTP 429" });
+  });
+
+  test("the newest plan event wins", async () => {
+    const { deps } = makeDeps(makeRegistry({}));
+    server = new DeckServer(deps);
+    const p = nextPort();
+    server.start(p);
+    server.broadcast({ type: "plan:error", reason: "HTTP 429" });
+    server.broadcast({ type: "plan:update", snapshot: planSnapshot } as unknown as WsEvent);
+
+    const { ws, received } = await connectClient(p);
+    sockets.push(ws);
+    await waitUntil(() => received.some((e) => e.type === "plan:update"));
+    expect(received.some((e) => e.type === "plan:error")).toBe(false);
+  });
+
+  test("nothing plan-shaped is replayed before the first poll completes", async () => {
+    const { deps } = makeDeps(makeRegistry({}));
+    server = new DeckServer(deps);
+    const p = nextPort();
+    server.start(p);
+
+    const { ws, received } = await connectClient(p);
+    sockets.push(ws);
+    await waitUntil(() => received.some((e) => e.type === "agents:update"));
+    expect(received.some((e) => e.type.startsWith("plan:"))).toBe(false);
+  });
+});
