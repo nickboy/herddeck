@@ -31,6 +31,16 @@ export class DeckServer {
   private sockets = new Set<ServerWebSocket<unknown>>();
   private lastAgents: AgentSnapshot[] = [];
   private lastTargets: TargetSnapshot[] = [];
+  /**
+   * Last plan-usage snapshot, replayed to a plugin on connect.
+   *
+   * Targets and agents were already cached and replayed; plan was not,
+   * so a Stream Deck restart painted the placeholder and left it there
+   * until the next poll. That gap used to be at most the 60s poll
+   * interval; it is now up to 5 minutes, or 10 if the poller has backed
+   * off — long enough to read as broken. Replaying costs no API call.
+   */
+  private lastPlan: WsEvent | null = null;
 
   constructor(private deps: ServerDeps) {}
 
@@ -62,6 +72,7 @@ export class DeckServer {
           this.send(ws, { type: "daemon:ready", version: this.deps.version });
           this.send(ws, { type: "targets:update", targets: this.lastTargets });
           this.send(ws, { type: "agents:update", agents: this.lastAgents });
+          if (this.lastPlan) this.send(ws, this.lastPlan);
         },
         close: (ws) => {
           this.sockets.delete(ws);
@@ -96,6 +107,9 @@ export class DeckServer {
   broadcast(event: WsEvent): void {
     if (event.type === "agents:update") this.lastAgents = event.agents;
     if (event.type === "targets:update") this.lastTargets = event.targets;
+    // Both outcomes are worth replaying: a stale error explains a blank
+    // key better than the placeholder does.
+    if (event.type === "plan:update" || event.type === "plan:error") this.lastPlan = event;
     const frame = JSON.stringify(event);
     for (const ws of this.sockets) ws.send(frame);
   }

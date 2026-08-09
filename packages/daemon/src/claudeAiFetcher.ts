@@ -25,7 +25,15 @@ export interface ProcResult {
 
 export type CredentialsReader = () => Promise<ProcResult>;
 
-export type PlanFetcher = (_unused?: string) => Promise<PlanUsageSnapshot | { error: string }>;
+/** Failures carry `retryAfterMs` when the server told us how long to
+ * wait. Structured rather than re-parsed out of the `error` prose —
+ * parsing our own log format is exactly the coupling that rots. */
+export interface PlanFetchError {
+  error: string;
+  retryAfterMs?: number;
+}
+
+export type PlanFetcher = (_unused?: string) => Promise<PlanUsageSnapshot | PlanFetchError>;
 
 export interface ClaudeAiFetcherOptions {
   url?: string;
@@ -86,7 +94,15 @@ export function makeClaudeAiFetcher(opts: ClaudeAiFetcherOptions = {}): PlanFetc
       return { error: "access token expired or invalid" };
     }
     if (!res.ok) {
-      return { error: await formatHttpError(res) };
+      // Throttling is the one failure the server can time for us. Pass
+      // it through structurally so the poller can obey it instead of
+      // guessing an interval.
+      const throttled = res.status === 429 || res.status === 503;
+      const retryAfterMs = throttled
+        ? parseRetryAfterMs(res.headers.get("retry-after"))
+        : undefined;
+      const error = await formatHttpError(res);
+      return retryAfterMs !== undefined ? { error, retryAfterMs } : { error };
     }
 
     let body: unknown;
@@ -114,6 +130,25 @@ export function makeClaudeAiFetcher(opts: ClaudeAiFetcherOptions = {}): PlanFetc
  *
  * Length-capped at ~240 chars total so daemon.log lines stay greppable.
  */
+/**
+ * `Retry-After` in milliseconds. RFC 9110 allows either delta-seconds or
+ * an HTTP-date; both appear in the wild. Returns undefined for a missing,
+ * unparseable, or already-elapsed value — the caller then falls back to
+ * its own backoff rather than trusting a number it could not read.
+ */
+export function parseRetryAfterMs(header: string | null, now = Date.now()): number | undefined {
+  if (!header) return undefined;
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number.parseInt(trimmed, 10);
+    return Number.isFinite(seconds) ? seconds * 1000 : undefined;
+  }
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return undefined;
+  const delta = at - now;
+  return delta > 0 ? delta : undefined;
+}
+
 export async function formatHttpError(res: Response): Promise<string> {
   const parts = [`HTTP ${res.status}`];
   const retryAfter = res.headers.get("retry-after");

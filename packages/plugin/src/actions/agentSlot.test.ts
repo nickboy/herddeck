@@ -213,7 +213,6 @@ describe("renderAgentSlot — context-window indicator (ctxPct)", () => {
     const r = renderAgentSlot(makeAgent({ cwd: "/home/nick/myproj" }), false, false);
     expect(r.displayName).toBe("myproj");
     expect(r.contextFillPercent).toBeUndefined();
-    expect(r.contextFillColor).toBeUndefined();
   });
 
   test("displayName + donut both rendered when ctxPct present", () => {
@@ -227,19 +226,14 @@ describe("renderAgentSlot — context-window indicator (ctxPct)", () => {
     expect(r.displayName).toBe("longname");
   });
 
-  test("threshold colors: green <50%, yellow 50-79%, red >=80%", () => {
-    expect(renderAgentSlot(makeAgent({ ctxPct: 0 }), false, false).contextFillColor).toBe(
-      "#94e2d5",
-    );
-    expect(renderAgentSlot(makeAgent({ ctxPct: 49 }), false, false).contextFillColor).toBe(
-      "#94e2d5",
-    );
-    expect(renderAgentSlot(makeAgent({ ctxPct: 50 }), false, false).contextFillColor).toBe(
-      "#f9e2af",
-    );
-    expect(renderAgentSlot(makeAgent({ ctxPct: 80 }), false, false).contextFillColor).toBe(
-      "#f38ba8",
-    );
+  test("the ring carries no colour axis of its own", () => {
+    // thresholdColor() used to tint the ring green/yellow/red. Those
+    // hexes are literally the status-background hexes, so the ring hit
+    // 1.00:1 on three statuses and the meter read inverted. Arc length
+    // already encodes the percentage.
+    const r = renderAgentSlot(makeAgent({ ctxPct: 85 }), false, false);
+    expect("contextFillColor" in r).toBe(false);
+    expect(r.contextFillPercent).toBe(85);
   });
 });
 
@@ -254,7 +248,6 @@ describe("renderAgentSlotImage — context donut", () => {
       backgroundHex: "#f9e2af",
       dim: false,
       contextFillPercent: 60,
-      contextFillColor: "#f9e2af",
     });
     expect(url).toContain(encodeURIComponent("#f9e2af"));
     expect(url).toContain(encodeURIComponent('cy="44"'));
@@ -267,7 +260,6 @@ describe("renderAgentSlotImage — context donut", () => {
       backgroundHex: EMPTY_SLOT_BG,
       dim: true,
       contextFillPercent: 60,
-      contextFillColor: "#f9e2af",
     });
     expect(url).not.toContain(encodeURIComponent("#f9e2af"));
     expect(url).not.toContain(encodeURIComponent('cy="44"'));
@@ -424,7 +416,6 @@ describe("key legibility", () => {
         dim: false,
         displayName: "alpha",
         contextFillPercent: 42,
-        contextFillColor: "#a6e3a1",
       }).replace(/^data:image\/svg\+xml,/, ""),
     );
     expect(svg).toContain('fill="#1e1e2e"');
@@ -437,5 +428,54 @@ describe("key legibility", () => {
     expect(contrastRatio("#ffffff", "#000000")).toBeCloseTo(21, 1);
     expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 1);
     expect(contrastRatio("#6c7086", "#6c7086")).toBeCloseTo(1, 5);
+  });
+});
+
+describe("no partially-transparent text", () => {
+  // A contrast test that measures the declared fill lies whenever the
+  // glyph is drawn at less than full opacity. `fill-opacity="0.75"`
+  // composited to 4.40:1 on `blocked` and 3.54:1 on `idle` while the
+  // suite happily reported 7.08 and 4.88.
+  test.each(Object.entries(STATUS_COLOURS))("%s renders every glyph opaque", (_status, bg) => {
+    const svg = decodeURIComponent(
+      renderAgentSlotImage({
+        backgroundHex: bg,
+        dim: false,
+        displayName: "alpha",
+        targetSuffix: "macmini",
+        contextFillPercent: 42,
+      }).replace(/^data:image\/svg\+xml,/, ""),
+    );
+    expect(svg).not.toContain("fill-opacity");
+  });
+});
+
+describe("the context ring is legible on every status", () => {
+  // WCAG 1.4.11 puts non-text UI at 3:1. Two bars matter: the ring
+  // against the key background, and — the one that actually decides
+  // whether a meter can be misread — the filled arc against the unfilled
+  // track behind it.
+  const NON_TEXT_FLOOR = 3;
+  const TRACK_ALPHA = 0.35; // `stroke="#000" stroke-opacity="0.35"`
+
+  function composite(fg: string, bg: string, alpha: number): string {
+    const parse = (h: string) => [0, 2, 4].map((i) => Number.parseInt(h.slice(1 + i, 3 + i), 16));
+    const [fr, fg2, fb] = parse(fg);
+    const [br, bg2, bb] = parse(bg);
+    const mix = (a: number, b: number) => Math.round(a * alpha + b * (1 - alpha));
+    return `#${[mix(fr ?? 0, br ?? 0), mix(fg2 ?? 0, bg2 ?? 0), mix(fb ?? 0, bb ?? 0)]
+      .map((v) => v.toString(16).padStart(2, "0"))
+      .join("")}`;
+  }
+
+  test.each(Object.entries(STATUS_COLOURS))("%s: ring reads against background", (_s, bg) => {
+    expect(contrastRatio(bg, inkFor(bg))).toBeGreaterThanOrEqual(NON_TEXT_FLOOR);
+  });
+
+  test.each(Object.entries(STATUS_COLOURS))("%s: filled arc reads against track", (_s, bg) => {
+    // Pre-fix this was 1.00:1 on working/done/blocked, and the dark
+    // track was the only visible arc — so 65% rendered as 35%.
+    const track = composite("#000000", bg, TRACK_ALPHA);
+    expect(contrastRatio(inkFor(bg), track)).toBeGreaterThanOrEqual(NON_TEXT_FLOOR);
   });
 });

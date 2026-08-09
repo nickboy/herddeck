@@ -7,7 +7,6 @@ import {
 import { type AgentSlotManager, slotFromCoordinates } from "../agentSlots";
 import type { BridgeClient } from "../bridgeClient";
 import type { AgentSnapshot, AgentStatus } from "../wire";
-import { thresholdColor } from "./threshold";
 
 export interface AgentSlotRender {
   /**
@@ -29,7 +28,6 @@ export interface AgentSlotRender {
   dim: boolean;
   pulse: boolean;
   contextFillPercent?: number;
-  contextFillColor?: string;
 }
 
 /**
@@ -145,7 +143,6 @@ export function renderAgentSlot(
     dim: false,
     pulse: agent.status === "blocked",
     contextFillPercent: ctx !== undefined ? Math.round(ctx) : undefined,
-    contextFillColor: ctx !== undefined ? thresholdColor(ctx) : undefined,
   };
 }
 
@@ -213,7 +210,6 @@ export function renderAgentSlotImage(render: {
   displayName?: string;
   targetSuffix?: string;
   contextFillPercent?: number;
-  contextFillColor?: string;
 }): string {
   // Every glyph on the key uses the ink the background can actually
   // carry — see inkFor().
@@ -222,6 +218,12 @@ export function renderAgentSlotImage(render: {
     ? `<rect x="12" y="20" width="48" height="32" rx="4" fill="none" stroke="#89b4fa" stroke-width="2"/><text x="36" y="42" font-family="monospace" font-size="14" font-weight="bold" fill="#89b4fa" text-anchor="middle">&gt;_</text>`
     : "";
 
+  // The target suffix is de-emphasised by size and position, not by
+  // fading it. `fill-opacity="0.75"` composited to 4.40:1 on `blocked`
+  // and 3.54:1 on `idle` — below AA, on the smallest glyph on the key.
+  // Hierarchy is not worth trading legibility for on a surface read at
+  // a glance.
+  //
   // Agent name at the very top of the button — drawn in SVG (not via
   // the SDK title) so its alignment isn't subject to any per-key
   // TitleAlignment override the user set when first placing the
@@ -238,9 +240,27 @@ export function renderAgentSlotImage(render: {
   // (the common case) keeps the uncluttered claudedeck look.
   const targetOverlay =
     !render.dim && render.targetSuffix
-      ? `<text x="36" y="23" font-family="-apple-system, sans-serif" font-size="7" fill="${ink}" fill-opacity="0.75" text-anchor="middle">${escapeForSvg(render.targetSuffix)}</text>`
+      ? `<text x="36" y="23" font-family="-apple-system, sans-serif" font-size="7" fill="${ink}" text-anchor="middle">${escapeForSvg(render.targetSuffix)}</text>`
       : "";
 
+  // The ring is drawn in the same ink as the text, not in a
+  // severity colour of its own.
+  //
+  // It used to use thresholdColor() — green/yellow/red by percentage —
+  // drawn straight onto the status-coloured background. Those two
+  // palettes share literal hex values (`THRESHOLD_YELLOW` *is*
+  // `STATUS_COLOURS.working`; `THRESHOLD_RED` *is* `blocked`), so on
+  // three of six statuses the ring hit exactly 1.00:1 and vanished.
+  // Worse than invisible: the unfilled remainder still showed its dark
+  // track, so a `working` agent at 65% read as 35%. The meter inverted.
+  //
+  // Arc length already encodes the percentage; hue was re-encoding the
+  // same number, coarser, in a channel the background already owns.
+  // Deleting that redundancy fixes the collision for free and inherits
+  // inkFor()'s contrast guarantee, so a future palette edit cannot
+  // reintroduce it. (thresholdColor still earns its place on the Plan
+  // Usage key, whose background is a neutral constant.)
+  //
   // Donut ring reflecting context-window % when known. Visual
   // language matches the Plan Usage key (which uses the same arc).
   // Centered at (36, 44) — vertically positioned so the ring sits
@@ -254,7 +274,7 @@ export function renderAgentSlotImage(render: {
   // matches the percent. transform="rotate(-90)" puts the start at
   // 12 o'clock instead of 3.
   let donut = "";
-  if (!render.dim && typeof render.contextFillPercent === "number" && render.contextFillColor) {
+  if (!render.dim && typeof render.contextFillPercent === "number") {
     const cx = 36;
     const cy = 44;
     const r = 18;
@@ -264,7 +284,7 @@ export function renderAgentSlotImage(render: {
     const dasharray = circumference.toFixed(2);
     const arc =
       render.contextFillPercent > 0
-        ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${render.contextFillColor}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${dasharray}" stroke-dashoffset="${dashoffset}" transform="rotate(-90 ${cx} ${cy})"/>`
+        ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${ink}" stroke-width="6" stroke-linecap="round" stroke-dasharray="${dasharray}" stroke-dashoffset="${dashoffset}" transform="rotate(-90 ${cx} ${cy})"/>`
         : "";
     donut =
       `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="6"/>${arc}` +

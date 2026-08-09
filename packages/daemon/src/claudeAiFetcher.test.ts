@@ -6,6 +6,7 @@ import {
   loadAccessToken,
   makeClaudeAiFetcher,
   parsePlanUsageResponse,
+  parseRetryAfterMs,
 } from "./claudeAiFetcher";
 
 const okCreds: CredentialsReader = async () => ({
@@ -326,5 +327,30 @@ describe("per-model weekly buckets", () => {
   test("ignores siblings that are not usage buckets", () => {
     const { metrics } = parsePlanUsageResponse(body, Date.now());
     expect(metrics.some((m) => /dashboard|spend/i.test(m.label))).toBe(false);
+  });
+});
+
+describe("parseRetryAfterMs", () => {
+  // RFC 9110 allows delta-seconds or an HTTP-date; both appear in the
+  // wild. An unreadable value must yield undefined so the caller falls
+  // back to its own backoff instead of trusting a number it misparsed.
+  test("reads delta-seconds", () => {
+    expect(parseRetryAfterMs("272")).toBe(272_000);
+    expect(parseRetryAfterMs(" 30 ")).toBe(30_000);
+    expect(parseRetryAfterMs("0")).toBe(0);
+  });
+
+  test("reads an HTTP-date as a delta from now", () => {
+    const now = Date.parse("2026-08-08T12:00:00Z");
+    expect(parseRetryAfterMs("Sat, 08 Aug 2026 12:05:00 GMT", now)).toBe(5 * 60_000);
+  });
+
+  test("ignores a date already in the past", () => {
+    const now = Date.parse("2026-08-08T12:00:00Z");
+    expect(parseRetryAfterMs("Sat, 08 Aug 2026 11:00:00 GMT", now)).toBeUndefined();
+  });
+
+  test.each([null, "", "soon", "-5", "12abc"])("ignores %p", (header) => {
+    expect(parseRetryAfterMs(header as string | null)).toBeUndefined();
   });
 });
