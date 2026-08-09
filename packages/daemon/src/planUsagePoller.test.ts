@@ -205,41 +205,41 @@ describe("PlanUsagePoller", () => {
   });
 });
 
-describe("PlanUsagePoller exponential backoff", () => {
-  /**
-   * Track every interval registered + cleared so we can assert that
-   * the poller re-arms with a longer interval after each consecutive
-   * error and snaps back to the base interval on the first success.
-   */
-  function makeBackoffTimers(): {
-    setIntervalImpl: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
-    clearIntervalImpl: (h: ReturnType<typeof setTimeout>) => void;
-    intervals: number[];
-    tickAll: () => Promise<void>;
-  } {
-    const intervals: number[] = [];
-    let currentCb: (() => void) | null = null;
-    const handle = { dummy: true } as unknown as ReturnType<typeof setTimeout>;
-    return {
-      setIntervalImpl: (fn, ms) => {
-        currentCb = fn;
-        intervals.push(ms);
-        return handle;
-      },
-      clearIntervalImpl: () => {
-        currentCb = null;
-      },
-      intervals,
-      tickAll: async () => {
-        if (!currentCb) throw new Error("no interval armed");
-        await currentCb();
-        // microtask flush so the async tick body completes before the
-        // next call sees stale state.
-        await new Promise((r) => setTimeout(r, 0));
-      },
-    };
-  }
+/**
+ * Track every interval registered + cleared so we can assert that
+ * the poller re-arms with a longer interval after each consecutive
+ * error and snaps back to the base interval on the first success.
+ */
+function makeBackoffTimers(): {
+  setIntervalImpl: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  clearIntervalImpl: (h: ReturnType<typeof setTimeout>) => void;
+  intervals: number[];
+  tickAll: () => Promise<void>;
+} {
+  const intervals: number[] = [];
+  let currentCb: (() => void) | null = null;
+  const handle = { dummy: true } as unknown as ReturnType<typeof setTimeout>;
+  return {
+    setIntervalImpl: (fn, ms) => {
+      currentCb = fn;
+      intervals.push(ms);
+      return handle;
+    },
+    clearIntervalImpl: () => {
+      currentCb = null;
+    },
+    intervals,
+    tickAll: async () => {
+      if (!currentCb) throw new Error("no interval armed");
+      await currentCb();
+      // microtask flush so the async tick body completes before the
+      // next call sees stale state.
+      await new Promise((r) => setTimeout(r, 0));
+    },
+  };
+}
 
+describe("PlanUsagePoller exponential backoff", () => {
   test("consecutive errors escalate the interval 2× each tick (capped at 10 min)", async () => {
     const timers = makeBackoffTimers();
     const poller = new PlanUsagePoller({
@@ -257,21 +257,20 @@ describe("PlanUsagePoller exponential backoff", () => {
     // Initial start() armed at base interval before the immediate
     // tick fired — the first tick is in flight and will update cadence.
     await new Promise((r) => setTimeout(r, 0));
-    // After immediate tick (error #1): 2× base = 120000
-    expect(timers.intervals.at(-1)).toBe(120_000);
-    // Drive subsequent ticks, each compounding.
+    // Each failure raises the adaptive floor 1.5× as well as doubling
+    // for the consecutive-error count, so the gap grows faster than
+    // doubling alone: floor 90k × 2 = 180k.
+    expect(timers.intervals.at(-1)).toBe(180_000);
     await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(240_000); // 4×
-    await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(480_000); // 8×
-    // Cap at 10 min (600_000) after enough errors. 16× = 960000 > cap.
+    expect(timers.intervals.at(-1)).toBe(540_000); // floor 135k × 4
+    // Cap at 10 min regardless of how the two multipliers compound.
     await timers.tickAll();
     expect(timers.intervals.at(-1)).toBe(600_000);
     await timers.tickAll();
     expect(timers.intervals.at(-1)).toBe(600_000); // stays capped
   });
 
-  test("a successful tick after errors resets cadence to base interval", async () => {
+  test("a single success does not undo a raised floor", async () => {
     const timers = makeBackoffTimers();
     let nthCall = 0;
     const poller = new PlanUsagePoller({
@@ -288,12 +287,15 @@ describe("PlanUsagePoller exponential backoff", () => {
     poller.on("error", () => {});
     poller.start();
     await new Promise((r) => setTimeout(r, 0));
-    expect(timers.intervals.at(-1)).toBe(120_000); // after error 1
+    expect(timers.intervals.at(-1)).toBe(180_000); // error 1: floor 90k × 2
     await timers.tickAll();
-    expect(timers.intervals.at(-1)).toBe(240_000); // after error 2
+    expect(timers.intervals.at(-1)).toBe(540_000); // error 2: floor 135k × 4
     await timers.tickAll();
-    // Third tick succeeds → cadence resets to base.
-    expect(timers.intervals.at(-1)).toBe(60_000);
+    // Third tick succeeds. The consecutive-error multiplier clears, but
+    // the floor stays raised — this is the whole point. Live, the
+    // endpoint failed roughly one tick in three, and resetting to base
+    // on any success pinned the poller at the rate limit indefinitely.
+    expect(timers.intervals.at(-1)).toBe(135_000);
   });
 
   test("zero errors keep the original interval (no spurious re-arm)", async () => {
@@ -422,5 +424,106 @@ describe("PlanUsagePoller statusline freshness gate", () => {
     lastStatusline = 1_000_000 - 11 * 60_000;
     await timers.tick();
     expect(fetchCalls).toBe(1); // resumed
+  });
+});
+
+describe("rate-limit defences", () => {
+  test("skips the fetch entirely when no plugin is connected", async () => {
+    // The Plan Usage key does not exist to render with nobody attached.
+    // On a herdr host with no deck this poll was spending the account's
+    // whole request budget on a key no one could see.
+    let calls = 0;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        calls += 1;
+        return sampleSnapshot;
+      },
+      intervalMs: 60_000,
+      clock: () => 0,
+      hasViewer: () => false,
+      setIntervalImpl: () => 0 as unknown as ReturnType<typeof setInterval>,
+      clearIntervalImpl: () => {},
+    });
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toBe(0);
+  });
+
+  test("resumes polling once a plugin connects", async () => {
+    const timers = makeBackoffTimers();
+    let calls = 0;
+    let connected = false;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        calls += 1;
+        return sampleSnapshot;
+      },
+      intervalMs: 60_000,
+      clock: () => 0,
+      hasViewer: () => connected,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls).toBe(0);
+
+    // The gate is read per tick, not latched at start — attaching a deck
+    // must not require restarting the daemon.
+    connected = true;
+    await timers.tickAll();
+    expect(calls).toBe(1);
+  });
+
+  test("an interleaved failure rate still backs off", async () => {
+    // The live failure shape: roughly one tick in three returned 429,
+    // interleaved rather than in runs. Consecutive-error backoff alone
+    // collapsed on every success, so the cadence never left the rate
+    // limit. The adaptive floor has to survive the successes.
+    const timers = makeBackoffTimers();
+    let n = 0;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        n += 1;
+        return n % 3 === 0 ? { error: "HTTP 429" } : sampleSnapshot;
+      },
+      intervalMs: 60_000,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    for (let i = 0; i < 9; i++) await timers.tickAll();
+
+    // Pre-fix this sat at the 60s base forever, because two successes
+    // out of every three reset it.
+    expect(timers.intervals.at(-1)).toBeGreaterThan(60_000);
+  });
+
+  test("a sustained clean streak earns the floor back", async () => {
+    const timers = makeBackoffTimers();
+    let n = 0;
+    const poller = new PlanUsagePoller({
+      fetcher: async () => {
+        n += 1;
+        return n === 1 ? { error: "HTTP 429" } : sampleSnapshot;
+      },
+      intervalMs: 60_000,
+      clock: () => 0,
+      setIntervalImpl: timers.setIntervalImpl,
+      clearIntervalImpl: timers.clearIntervalImpl,
+    });
+    poller.on("error", () => {});
+    poller.start();
+    await new Promise((r) => setTimeout(r, 0));
+    const raised = timers.intervals.at(-1) as number;
+    expect(raised).toBeGreaterThan(60_000);
+
+    // Five clean ticks buy one step back down — recovery is deliberately
+    // slower than the raise.
+    for (let i = 0; i < 6; i++) await timers.tickAll();
+    expect(timers.intervals.at(-1)).toBe(60_000);
   });
 });

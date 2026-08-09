@@ -84,6 +84,15 @@ export class DeckServer {
     return url.searchParams.get("token") === this.deps.token;
   }
 
+  /** How many Stream Deck plugin instances are connected. Drives the
+   * plan poller's viewer gate: with nobody attached, the Plan Usage key
+   * does not exist to render, so its rate-limited API poll is pure
+   * waste — and on a herdr host with no deck it was consuming the whole
+   * account budget. */
+  pluginCount(): number {
+    return this.sockets.size;
+  }
+
   broadcast(event: WsEvent): void {
     if (event.type === "agents:update") this.lastAgents = event.agents;
     if (event.type === "targets:update") this.lastTargets = event.targets;

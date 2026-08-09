@@ -3,7 +3,9 @@ import type { AgentSnapshot, AgentStatus } from "../wire";
 import {
   EMPTY_SLOT_BG,
   STATUS_COLOURS,
+  contrastRatio,
   distinguishingName,
+  inkFor,
   renderAgentSlot,
   renderAgentSlotImage,
 } from "./agentSlot";
@@ -391,5 +393,49 @@ describe("distinguishingName — exported helper", () => {
 
   test("zero budget with an over-budget last segment falls back to empty truncation", () => {
     expect(distinguishingName("a/b", 0)).toBe("");
+  });
+});
+
+describe("key legibility", () => {
+  // Text was hardcoded white. On the light half of the status palette
+  // that is unreadable — 1.27:1 on `working` against a 4.5:1 AA floor —
+  // and it is the state you most need to read at a glance.
+  const AA_NORMAL_TEXT = 4.5;
+
+  test.each(Object.entries(STATUS_COLOURS))(
+    "%s background carries its ink at WCAG AA",
+    (_status, bg) => {
+      expect(contrastRatio(bg, inkFor(bg))).toBeGreaterThanOrEqual(AA_NORMAL_TEXT);
+    },
+  );
+
+  test("light backgrounds take dark ink, dark backgrounds take white", () => {
+    expect(inkFor(STATUS_COLOURS.working)).toBe("#1e1e2e");
+    expect(inkFor(STATUS_COLOURS.done)).toBe("#1e1e2e");
+    expect(inkFor(STATUS_COLOURS.blocked)).toBe("#1e1e2e");
+    expect(inkFor(STATUS_COLOURS.idle)).toBe("#ffffff");
+    expect(inkFor(STATUS_COLOURS.offline)).toBe("#ffffff");
+  });
+
+  test("the rendered key uses that ink for name and context percentage", () => {
+    const svg = decodeURIComponent(
+      renderAgentSlotImage({
+        backgroundHex: STATUS_COLOURS.working,
+        dim: false,
+        displayName: "alpha",
+        contextFillPercent: 42,
+        contextFillColor: "#a6e3a1",
+      }).replace(/^data:image\/svg\+xml,/, ""),
+    );
+    expect(svg).toContain('fill="#1e1e2e"');
+    // The old hardcoded white must be gone from the text, not merely
+    // outvoted somewhere else in the document.
+    expect(svg).not.toContain('fill="#fff"');
+  });
+
+  test("contrastRatio is symmetric and self-referential", () => {
+    expect(contrastRatio("#ffffff", "#000000")).toBeCloseTo(21, 1);
+    expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 1);
+    expect(contrastRatio("#6c7086", "#6c7086")).toBeCloseTo(1, 5);
   });
 });
