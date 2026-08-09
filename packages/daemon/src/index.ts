@@ -15,7 +15,12 @@ import { TunnelManager } from "./tunnel";
 import { runTrigger } from "./wisprFlowTrigger";
 
 const VERSION = "0.1.0";
-const PLAN_POLL_INTERVAL_MS = 60_000;
+// 5 minutes, not 60s. The 5-hour and 7-day windows this renders move
+// far too slowly to justify a minute-by-minute poll, and 60s put the
+// daemon permanently at Anthropic's rate limit: 1136 successes against
+// 543 HTTP 429s on this machine, arriving interleaved. With two daemons
+// on one account it was double that.
+const PLAN_POLL_INTERVAL_MS = 5 * 60_000;
 
 const config = loadConfig();
 const hasRemote = config.targets.some((t) => t.kind === "remote");
@@ -59,7 +64,11 @@ console.log(
 
 let poller: PlanUsagePoller | null = null;
 if (config.planUsageEnabled) {
-  poller = new PlanUsagePoller({ fetcher: claudeAiFetcher, intervalMs: PLAN_POLL_INTERVAL_MS });
+  poller = new PlanUsagePoller({
+    fetcher: claudeAiFetcher,
+    intervalMs: PLAN_POLL_INTERVAL_MS,
+    hasViewer: () => server.pluginCount() > 0,
+  });
   poller.on("update", (snapshot) => server.broadcast({ type: "plan:update", snapshot }));
   poller.on("error", (reason) => server.broadcast({ type: "plan:error", reason: String(reason) }));
   poller.start();

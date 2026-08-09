@@ -30,6 +30,17 @@ export interface PlanUsagePollerOptions {
    * fall back to legacy unconditional polling).
    */
   getLastStatuslineAt?: () => number;
+  /**
+   * Whether anyone can actually see the Plan Usage key right now.
+   * Returns false when no Stream Deck plugin is connected, and the tick
+   * is skipped entirely.
+   *
+   * This is the cheapest possible rate-limit fix: a daemon on a machine
+   * with no deck attached — the herdr host in a two-machine setup — was
+   * spending the account's whole request budget rendering a key nobody
+   * could look at. Defaults to `() => true` (always poll).
+   */
+  hasViewer?: () => boolean;
 }
 
 /**
@@ -53,10 +64,28 @@ export class PlanUsagePoller extends EventEmitter {
   private readonly clearIntervalImpl: ClearIntervalImpl;
   private readonly clock: () => number;
   private readonly getLastStatuslineAt: () => number;
+  private readonly hasViewer: () => boolean;
   private handle: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private consecutiveErrors = 0;
   private currentIntervalMs = 0;
+  /**
+   * Adaptive floor for the polling cadence, at or above the configured
+   * interval.
+   *
+   * Consecutive-error backoff cannot fix steady-state throttling, and
+   * this endpoint produced exactly that: 1136 successes against 543
+   * HTTP 429s, arriving interleaved rather than in runs. One success
+   * reset the counter, so the cadence oscillated between the base
+   * interval and one doubling — forever, permanently at the ceiling,
+   * with `errors=1` logged 492 times and `errors=4` only 5.
+   *
+   * Backoff answers "the service is down". This answers "we are asking
+   * too often", which is a different question: every 429 raises the
+   * floor, and only a sustained clean streak lowers it again.
+   */
+  private floorMs: number;
+  private cleanStreak = 0;
 
   /**
    * Cap on the exponential backoff so we never go more than 10 min
@@ -64,6 +93,12 @@ export class PlanUsagePoller extends EventEmitter {
    * something else is wrong; let the user notice in daemon.log."
    */
   private static readonly MAX_BACKOFF_MS = 10 * 60_000;
+
+  /** Multiplicative step for the adaptive floor, and how many clean
+   * ticks it takes to earn a step back down. Deliberately asymmetric:
+   * back off fast, recover slowly. */
+  private static readonly FLOOR_STEP = 1.5;
+  private static readonly CLEAN_STREAK_TO_RECOVER = 5;
 
   /**
    * Skip the fetch when the statusline channel delivered a snapshot
@@ -82,6 +117,8 @@ export class PlanUsagePoller extends EventEmitter {
     this.clearIntervalImpl = opts.clearIntervalImpl ?? ((h) => clearInterval(h));
     this.clock = opts.clock ?? Date.now;
     this.getLastStatuslineAt = opts.getLastStatuslineAt ?? (() => 0);
+    this.hasViewer = opts.hasViewer ?? (() => true);
+    this.floorMs = opts.intervalMs;
   }
 
   start(): void {
@@ -127,13 +164,27 @@ export class PlanUsagePoller extends EventEmitter {
     const previousMs = this.currentIntervalMs;
     if (success) {
       this.consecutiveErrors = 0;
-      this.currentIntervalMs = this.intervalMs;
+      this.cleanStreak += 1;
+      // Earn the floor back only after a run of clean ticks, so an
+      // interleaved 2-in-3 success rate cannot undo a raise.
+      if (this.cleanStreak >= PlanUsagePoller.CLEAN_STREAK_TO_RECOVER) {
+        this.cleanStreak = 0;
+        this.floorMs = Math.max(this.intervalMs, this.floorMs / PlanUsagePoller.FLOOR_STEP);
+      }
+      this.currentIntervalMs = this.floorMs;
     } else {
       this.consecutiveErrors += 1;
+      this.cleanStreak = 0;
+      // Any failure means we are asking too often — raise the floor,
+      // not just this one gap.
+      this.floorMs = Math.min(
+        this.floorMs * PlanUsagePoller.FLOOR_STEP,
+        PlanUsagePoller.MAX_BACKOFF_MS,
+      );
       // 1× → 2× → 4× → 8× ... capped. Math.min on the cap so we never
       // exceed MAX_BACKOFF_MS even if consecutiveErrors gets large.
       const factor = 2 ** Math.min(this.consecutiveErrors, 20);
-      this.currentIntervalMs = Math.min(this.intervalMs * factor, PlanUsagePoller.MAX_BACKOFF_MS);
+      this.currentIntervalMs = Math.min(this.floorMs * factor, PlanUsagePoller.MAX_BACKOFF_MS);
     }
     if (this.currentIntervalMs !== previousMs) {
       logInfo(
@@ -149,6 +200,10 @@ export class PlanUsagePoller extends EventEmitter {
     // the poller available as a fallback (no Claude session active,
     // or daemon just booted) but avoids the rate-limited endpoint
     // during normal interactive use.
+    if (!this.hasViewer()) {
+      logInfo("plan poll skipped — no plugin connected");
+      return;
+    }
     const lastStatusline = this.getLastStatuslineAt();
     if (lastStatusline > 0) {
       const age = this.clock() - lastStatusline;

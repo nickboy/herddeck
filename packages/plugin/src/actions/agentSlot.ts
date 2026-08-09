@@ -45,6 +45,42 @@ export const STATUS_COLOURS: Record<AgentStatus, string> = {
   offline: "#45475a",
 };
 
+/** Catppuccin base — the dark ink used on light status backgrounds. */
+const INK_DARK = "#1e1e2e";
+const INK_LIGHT = "#ffffff";
+
+/** WCAG relative luminance of a `#rrggbb` colour. */
+function luminance(hex: string): number {
+  const h = hex.replace("#", "");
+  const channels = [0, 2, 4].map((i) => Number.parseInt(h.slice(i, i + 2), 16) / 255);
+  const linear = channels.map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+  return 0.2126 * (linear[0] ?? 0) + 0.7152 * (linear[1] ?? 0) + 0.0722 * (linear[2] ?? 0);
+}
+
+/** WCAG contrast ratio between two `#rrggbb` colours. */
+export function contrastRatio(a: string, b: string): number {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/**
+ * Pick the readable ink for a status background instead of assuming
+ * white.
+ *
+ * White was hardcoded, and on the light half of the Catppuccin status
+ * palette it is unreadable: 1.27:1 on `working`, 1.49:1 on `done`,
+ * 2.32:1 on `blocked`, against a WCAG AA floor of 4.5:1. Dark ink
+ * scores 12.91 / 11.03 / 7.08 on those same three. On the dark half
+ * (`idle`, `offline`) white still wins, so this picks per background
+ * rather than swapping one hardcoded colour for another.
+ */
+export function inkFor(backgroundHex: string): string {
+  return contrastRatio(backgroundHex, INK_DARK) > contrastRatio(backgroundHex, INK_LIGHT)
+    ? INK_DARK
+    : INK_LIGHT;
+}
+
 /** Empty-slot background. Distinct so the key reads as "no agent here". */
 export const EMPTY_SLOT_BG = "#1c1f26";
 
@@ -179,6 +215,9 @@ export function renderAgentSlotImage(render: {
   contextFillPercent?: number;
   contextFillColor?: string;
 }): string {
+  // Every glyph on the key uses the ink the background can actually
+  // carry — see inkFor().
+  const ink = inkFor(render.backgroundHex);
   const iconOverlay = render.dim
     ? `<rect x="12" y="20" width="48" height="32" rx="4" fill="none" stroke="#89b4fa" stroke-width="2"/><text x="36" y="42" font-family="monospace" font-size="14" font-weight="bold" fill="#89b4fa" text-anchor="middle">&gt;_</text>`
     : "";
@@ -191,7 +230,7 @@ export function renderAgentSlotImage(render: {
   // top edge while leaving a tiny breathing margin.
   const nameOverlay =
     !render.dim && render.displayName
-      ? `<text x="36" y="14" font-family="-apple-system, sans-serif" font-size="11" font-weight="600" fill="#fff" text-anchor="middle">${escapeForSvg(render.displayName)}</text>`
+      ? `<text x="36" y="14" font-family="-apple-system, sans-serif" font-size="11" font-weight="600" fill="${ink}" text-anchor="middle">${escapeForSvg(render.displayName)}</text>`
       : "";
 
   // Small target-name suffix, only present with >1 configured
@@ -199,7 +238,7 @@ export function renderAgentSlotImage(render: {
   // (the common case) keeps the uncluttered claudedeck look.
   const targetOverlay =
     !render.dim && render.targetSuffix
-      ? `<text x="36" y="23" font-family="-apple-system, sans-serif" font-size="7" fill="#cdd6f4" fill-opacity="0.75" text-anchor="middle">${escapeForSvg(render.targetSuffix)}</text>`
+      ? `<text x="36" y="23" font-family="-apple-system, sans-serif" font-size="7" fill="${ink}" fill-opacity="0.75" text-anchor="middle">${escapeForSvg(render.targetSuffix)}</text>`
       : "";
 
   // Donut ring reflecting context-window % when known. Visual
@@ -229,7 +268,7 @@ export function renderAgentSlotImage(render: {
         : "";
     donut =
       `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="6"/>${arc}` +
-      `<text x="${cx}" y="${cy + 5}" font-family="-apple-system, sans-serif" font-size="16" font-weight="bold" fill="#fff" text-anchor="middle">${render.contextFillPercent}%</text>`;
+      `<text x="${cx}" y="${cy + 5}" font-family="-apple-system, sans-serif" font-size="16" font-weight="bold" fill="${ink}" text-anchor="middle">${render.contextFillPercent}%</text>`;
   }
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72"><rect width="72" height="72" fill="${render.backgroundHex}"/>${iconOverlay}${donut}${nameOverlay}${targetOverlay}</svg>`;
