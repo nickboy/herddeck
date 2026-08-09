@@ -140,10 +140,28 @@ export class AgentSlotManager extends EventEmitter {
     return sameAgent(this.focused, agent);
   }
 
-  /** The full current snapshot of the focused agent (status, name, …), or undefined if nothing is focused. */
+  /**
+   * The full snapshot of the agent the answer/arrow/Enter keys act on.
+   *
+   * An explicit slot press always wins. With nothing pressed, fall back
+   * to the pane herdr says is focused — the one the user is looking at.
+   * Without that fallback every one of those keys is inert until a slot
+   * is pressed, which is not discoverable: dictating a prompt and
+   * reaching for Enter just flashes an alert and drops the keystroke.
+   *
+   * Returns undefined rather than guessing when herdr reports no focused
+   * pane, or reports one across a target boundary we are filtered away
+   * from — sending Enter to the wrong agent submits someone else's
+   * prompt, so silence is the safer failure.
+   */
   getFocusedAgent(): AgentSnapshot | undefined {
-    if (!this.focused) return undefined;
-    return this.agentsList.find((a) => sameAgent(a, this.focused));
+    if (this.focused) {
+      return this.agentsList.find((a) => sameAgent(a, this.focused));
+    }
+    const herdrFocused = this.agentsList.filter((a) => a.focused);
+    // More than one target can each report a focused pane; only an
+    // unambiguous single candidate is safe to act on.
+    return herdrFocused.length === 1 ? herdrFocused[0] : undefined;
   }
 }
 

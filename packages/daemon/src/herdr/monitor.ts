@@ -50,6 +50,10 @@ const LIFECYCLE_SUBS: Subscription[] = [
   { type: "pane.closed" },
   { type: "pane.moved" },
   { type: "pane.agent_detected" },
+  // Focus, so keys can route to the pane the user is actually looking
+  // at before any slot has been pressed. Chatty but idempotent in the
+  // cache, and the agentsChanged emit is microtask-debounced.
+  { type: "pane.focused" },
   { type: "workspace.created" },
   { type: "workspace.renamed" },
   { type: "workspace.closed" },

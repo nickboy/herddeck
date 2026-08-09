@@ -223,6 +223,7 @@ export class SessionRegistry {
           title: a.title,
           tabLabel: a.tabLabel,
           ctxPct: Number.isFinite(ctxPct) ? ctxPct : null,
+          focused: a.focused,
           stateChangeSeq: a.stateChangeSeq,
         });
       }
