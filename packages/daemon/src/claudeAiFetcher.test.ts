@@ -289,3 +289,42 @@ describe("formatHttpError", () => {
     }
   });
 });
+
+describe("per-model weekly buckets", () => {
+  // Key shape observed live on a real account. The per-model limits
+  // arrive as `seven_day_*` siblings, not under any `weekly` name — a
+  // generic pass matching only /weekly/ dropped every one of them.
+  const body = {
+    five_hour: { utilization: 50, resets_at: "2026-08-09T00:00:00Z" },
+    seven_day: { utilization: 70, resets_at: "2026-08-14T00:00:00Z" },
+    seven_day_opus: { utilization: 15, resets_at: "2026-08-14T00:00:00Z" },
+    seven_day_sonnet: { utilization: 22, resets_at: "2026-08-14T00:00:00Z" },
+    seven_day_oauth_apps: { utilization: 6, resets_at: "2026-08-14T00:00:00Z" },
+    // Non-bucket siblings in the same response must not become metrics.
+    member_dashboard_available: true,
+    spend: { total: 12 },
+  };
+
+  test("surfaces each per-model weekly limit", () => {
+    const { metrics } = parsePlanUsageResponse(body, Date.now());
+    const labels = metrics.map((m) => m.label);
+    expect(labels).toContain("Seven Day Opus");
+    expect(labels).toContain("Seven Day Sonnet");
+    expect(labels).toContain("Seven Day Oauth Apps");
+  });
+
+  test("keeps the plain seven_day bucket distinct from its siblings", () => {
+    const { metrics } = parsePlanUsageResponse(body, Date.now());
+    // The all-models bucket keeps its first-class key; the siblings
+    // share the weeklyOther key used by the Stream Deck cycle.
+    const opus = metrics.find((m) => m.label === "Seven Day Opus");
+    expect(opus?.key).toBe("weeklyOther");
+    expect(Math.round(opus?.percentUsed ?? 0)).toBe(15);
+    expect(metrics.filter((m) => m.label === "Seven Day Opus")).toHaveLength(1);
+  });
+
+  test("ignores siblings that are not usage buckets", () => {
+    const { metrics } = parsePlanUsageResponse(body, Date.now());
+    expect(metrics.some((m) => /dashboard|spend/i.test(m.label))).toBe(false);
+  });
+});

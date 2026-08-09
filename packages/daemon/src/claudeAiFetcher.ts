@@ -266,19 +266,28 @@ export function parsePlanUsageResponse(body: unknown, fetchedAt: number): PlanUs
     consume(extraKey);
   }
 
-  // Generic weekly bucket pass. Any top-level key that *contains*
-  // `weekly` (e.g. `weekly_claude_design`, `claude_design_weekly`,
-  // `weekly_sonnet_only`) and parses as a bucket gets surfaced as a
-  // metric with the same `weeklyOther` key. The label is the raw
-  // key name, lightly humanised, so the user can recognise which
-  // bucket they're looking at on the Stream Deck cycle.
+  // Generic weekly bucket pass. Any unconsumed top-level key that
+  // either *contains* `weekly` (e.g. `weekly_claude_design`) or is a
+  // `seven_day_*` sibling of the plain seven-day bucket, and parses as
+  // a bucket, gets surfaced as a metric with the same `weeklyOther`
+  // key. The label is the raw key name, lightly humanised, so the user
+  // can recognise which bucket they're looking at on the Stream Deck
+  // cycle.
+  //
+  // The `seven_day_*` half matters: per-model weekly limits arrive as
+  // siblings of `seven_day` rather than under any `weekly` name.
+  // Observed live on a real account: `seven_day_opus`,
+  // `seven_day_sonnet`, `seven_day_oauth_apps`, `seven_day_cowork`.
+  // Matching only on `weekly` dropped every one of them silently —
+  // the Stream Deck showed an all-models figure while the per-model
+  // meter that actually gates you went unseen.
   //
   // Once the actual Claude Design key name is confirmed in
   // daemon.log (`plan response shape: keys=[…]`), it gets promoted
   // to a first-class explicit bucket with a curated label.
   for (const [key, value] of Object.entries(b)) {
     if (consumedKeys.has(key)) continue;
-    if (!/weekly/i.test(key)) continue;
+    if (!/weekly/i.test(key) && !/^seven[_-]?day[_-]./i.test(key)) continue;
     const bucket = pluckBucket(value);
     if (!bucket) continue;
     metrics.push({
