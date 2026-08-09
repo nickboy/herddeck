@@ -4,9 +4,9 @@ Source material for writing about the project. Everything here is
 measured on real hardware against a real account, not reconstructed from
 memory — where a number appears, it came out of a log or a live probe.
 
-Built 2026-08-06 to 2026-08-08. 33 commits on `main`, 35 pull requests,
-four packages, 471 tests across 32 files. Roughly 7,200 lines of source
-against 7,300 lines of test — a ratio that was not a target, but is a
+Built 2026-08-06 to 2026-08-09. 35 commits on `main`, 37 pull requests,
+four packages, 504 tests across 32 files. Roughly 7,250 lines of source
+against 7,500 lines of test — a ratio that was not a target, but is a
 fair summary of where the difficulty lived.
 
 ---
@@ -318,7 +318,48 @@ the same data had fired **zero times**, because nothing ever populated
 the timestamp it read. Machinery built for exactly the problem being
 suffered, inert for the whole time it was needed.
 
-### 4.7 White text on a yellow key
+### 4.7 A meter that read backwards
+
+The best bug in the project, and the one that arrived last.
+
+Each agent key draws a ring for context fullness. The ring took its
+colour from `thresholdColor(pct)` — green under 50%, yellow to 79%, red
+above — drawn straight onto the status-coloured background.
+
+Those two palettes are both Catppuccin accents, and they overlap
+*exactly*:
+
+```text
+THRESHOLD_YELLOW === STATUS_COLOURS.working    // "#f9e2af"
+THRESHOLD_RED    === STATUS_COLOURS.blocked    // "#f38ba8"
+```
+
+Nine of eighteen ring/background combinations fell under the 3:1
+non-text contrast floor, and three were **1.00:1** — the ring and the
+background were the same colour.
+
+Invisible would have been the good outcome. What actually happened is
+worse: the *unfilled* part of the ring still draws a dark track. So a
+`working` agent at 65% showed its filled arc vanish and its empty
+35% remain — one dark arc covering just over a third of the circle.
+
+**The key read 35%.** Not blank, not obviously broken. Confidently
+wrong, in the two states — `working` and `blocked` — where you are most
+likely to be checking whether you need to intervene.
+
+The fix was to delete something rather than add something. Arc length
+already encodes the percentage; hue was re-encoding the same number,
+coarser, in the one channel the background had already claimed. The ring
+now uses the same ink as the text, which resolves the collision and
+inherits the text's contrast guarantee for free — so a future palette
+edit cannot bring it back.
+
+The general lesson is not about colour. It is that **two independent
+signals were competing for one channel on one surface**, and the
+symptom of that competition was not "hard to read" but "reads as a
+different number."
+
+### 4.8 White text on a yellow key
 
 Text on the agent slot keys was hardcoded `fill="#fff"`. Measured against
 the status palette:
@@ -480,16 +521,75 @@ formatting error in the very next pull request.
 
 ---
 
+## 8a. What review caught that testing did not
+
+§8 argues that execution found what reading missed. An adversarial
+review of the contrast and rate-limit work argued the other way, and
+was right, so both belong here.
+
+Three findings, and none of them were things a test could have failed
+on, because in each case the tests agreed with the code:
+
+**The fix was scoped wrong.** The commit was titled "make slot text
+readable" and fixed the text on a key whose dominant graphic is the
+ring. The ring was worse — 1.00:1, and reading backwards (§4.7). Worse,
+the commit message claimed its new test meant "a future palette change
+cannot quietly reintroduce this." It could not — because the test never
+covered the ring. A confident claim about a guarantee that was never
+made.
+
+**The tests ran against a configuration the same commit had changed.**
+The adaptive backoff was tuned and verified at a 60-second base
+interval. The same commit moved production to 300 seconds. At 300s the
+arithmetic is entirely different: the cap is only 2× the base while one
+backoff step is 1.5×, so the *first* failure already exceeded the cap
+and the consecutive-error term never affected an outcome again. The
+ladder had two rungs. Twelve tests, none at the shipping value.
+
+**The tuning knob was mathematically inert.** Up-steps and down-steps
+were the same multiplicative size, so the constant that looked like the
+tuning parameter cancelled out of the stability condition entirely. Only
+the streak length could affect whether the mechanism converged. A knob
+that cannot turn anything is worse than no knob, because someone will
+turn it.
+
+The mechanism was deleted rather than tuned. Anthropic states the
+correct wait in `Retry-After` — and the fetcher had been capturing that
+header all along, formatting it into a log string, and throwing it away.
+The replacement obeys the server and is *less* code than the heuristic
+it removed.
+
+Two things worth noting about the review itself.
+
+It was asked to attack specific claims, with the arithmetic demanded
+rather than the verdict — "work through the failure rate; does it
+converge or pin at the cap?" It came back with a Markov chain, a
+break-even threshold of 12.9%, and the observation that the convergence
+worry was *unfounded* while a different problem was fatal. A reviewer
+told to find problems will find some; a reviewer told to check a
+specific number sometimes tells you the number is fine and the question
+was wrong.
+
+And **the reviewer corrected itself.** Its first pass closed with a
+suggestion that wiring one constructor argument would have delivered
+more than the whole mechanism. Asked to confirm before that shaped the
+fix, it checked, found the channel it depended on does not exist
+anywhere in the repo, and led its second response by retracting the
+claim. The retraction was the most valuable paragraph in it. A review
+that cannot be wrong is not a review.
+
+---
+
 ## 9. Numbers
 
 | | |
 | --- | --- |
-| Built | 2026-08-06 → 2026-08-08 |
-| Commits on `main` | 33 |
-| Pull requests | 35, all through 7 required CI checks |
+| Built | 2026-08-06 → 2026-08-09 |
+| Commits on `main` | 35 |
+| Pull requests | 37, all through 7 required CI checks |
 | Packages | 4 (`protocol`, `daemon`, `plugin`, `cli`) |
-| Tests | 471 across 32 files |
-| Source / test lines | ~7,200 / ~7,300 |
+| Tests | 504 across 32 files |
+| Source / test lines | ~7,250 / ~7,500 |
 | herdr | 0.8.0, protocol 19 |
 | Runtime | Bun ≥ 1.2, TypeScript strict, Biome |
 | Machines | 2 (laptop with deck, desktop with agents, SSH tunnel) |
@@ -510,3 +610,11 @@ history and squash merges; nothing lands without all seven green.
   upstream.
 - **Pressing an answer key against a real blocked prompt.** The one
   remaining check that needs a human and a live agent at the same time.
+- **Whether the statusline carries plan usage at all.** The poller has a
+  freshness gate designed to skip the rate-limited endpoint whenever a
+  statusline had recently supplied the same numbers. It has never fired,
+  because nothing populates it — and the channel cannot be built until
+  someone establishes whether Claude Code's statusline payload contains
+  account-scoped rate-limit windows in the first place. The gate now says
+  so in its own docstring rather than implying a defence that does not
+  exist.
