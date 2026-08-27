@@ -115,7 +115,7 @@ function defaultExec(): ExecFn {
  * matching, because the two failure directions do not cost the same:
  *
  *   false positive -> one extra warning, install proceeds, daemon runs
- *   false negative -> the six-day outage this whole file exists to stop
+ *   false negative -> a daemon that cannot start, discovered weeks later
  *
  * That is only safe because the paths we must NOT match carry no digits
  * at all — `/opt/homebrew/bin/bun`, `/usr/local/bin/bun`,
@@ -181,13 +181,10 @@ export interface BunPathChoice {
  *
  * `process.execPath` is the obvious answer and the wrong one: Bun reports
  * where it really lives, not the symlink it was invoked through, so a
- * plist written from it names `/opt/homebrew/Cellar/bun/<version>/bin/bun`.
- * That works until the next `brew upgrade bun` deletes the directory, at
- * which point launchd cannot spawn the daemon and retries forever with
- * exit code 78 (EX_CONFIG). Observed in the field: the agent was down for
- * six days after bun went 1.3.14 -> 1.4.0, with nothing in the log but a
- * clean shutdown, because nothing had crashed — it simply could never
- * start again.
+ * plist written from it names a path the next package upgrade deletes.
+ * The failure is silent and delayed — launchd simply can never spawn the
+ * daemon again. See the "bun path must survive a package upgrade" tests
+ * for the real paths and the outage they came from.
  *
  * So prefer whatever a shell would run (`Bun.which("bun")`, normally the
  * stable `/opt/homebrew/bin/bun` symlink) and fall back through the
@@ -977,7 +974,16 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
   const version = await opts.exec(opts.bunPath, ["--version"]);
   const minorOf = (v: string) => v.trim().split(".").slice(0, 2).join(".");
   const chosen = minorOf(version.stdout);
-  if (version.exitCode === 0 && chosen && chosen !== minorOf(Bun.version)) {
+  if (version.exitCode !== 0) {
+    // A binary that cannot answer --version is not evidence of version
+    // skew, but it is evidence of something worse: the thing about to be
+    // written into the plist may not be bun at all. Staying silent here
+    // would leave the check quiet exactly when its subject is most
+    // suspect.
+    io.stderr(
+      `warning: ${opts.bunPath} did not answer --version; cannot confirm it is bun.\n  launchd will run it anyway — check the path before relying on the daemon.\n`,
+    );
+  } else if (chosen && chosen !== minorOf(Bun.version)) {
     io.stderr(
       `warning: ${opts.bunPath} is bun ${version.stdout.trim()}, but install is running bun ${Bun.version}.\n  The daemon will run under the former; check it is the one you meant.\n`,
     );
