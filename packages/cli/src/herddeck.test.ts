@@ -16,6 +16,7 @@ import {
   checkRunDir,
   checkSshPrecheck,
   formatDoctor,
+  isExecutableFile,
   isLaunchAgentPlistOurs,
   looksVersionPinned,
   parseHerdrStatus,
@@ -879,6 +880,8 @@ describe("herddeck install / uninstall", () => {
 
     // No bootout when nothing was loaded.
     expect(calls).toEqual([
+      // install checks the chosen bun's version before touching launchd.
+      { cmd: "/fake/bin/bun", args: ["--version"] },
       { cmd: "launchctl", args: ["print", `gui/501/${LAUNCHD_LABEL}`] },
       { cmd: "launchctl", args: ["bootstrap", "gui/501", plistPath] },
     ]);
@@ -903,6 +906,8 @@ describe("herddeck install / uninstall", () => {
 
     const plistPath = join(launchAgentsDir, `${LAUNCHD_LABEL}.plist`);
     expect(calls).toEqual([
+      // install checks the chosen bun's version before touching launchd.
+      { cmd: "/fake/bin/bun", args: ["--version"] },
       { cmd: "launchctl", args: ["print", `gui/501/${LAUNCHD_LABEL}`] },
       { cmd: "launchctl", args: ["bootout", `gui/501/${LAUNCHD_LABEL}`] },
       // The unload is confirmed before bootstrapping — see the
@@ -1205,6 +1210,14 @@ describe("bun path must survive a package upgrade", () => {
     expect(pickBunPath([STABLE, CELLAR], exists)).toEqual({ path: CELLAR, pinned: true });
   });
 
+  test("returns null rather than a path when nothing is usable", () => {
+    // Distinct from the all-pinned case: there is no daemon that runs
+    // today, so handing back a path anyway would reproduce the exit-78
+    // loop at install time while reporting success.
+    expect(pickBunPath([STABLE, CELLAR], () => false)).toEqual({ path: null, pinned: false });
+    expect(pickBunPath([], () => true)).toEqual({ path: null, pinned: false });
+  });
+
   test("still installs when every candidate is version-pinned, but flags it", () => {
     // Refusing to install would be worse than installing something that
     // runs today; the caller warns instead.
@@ -1220,7 +1233,7 @@ describe("bun path must survive a package upgrade", () => {
     // path looks perfectly correct in the plist and only fails months
     // later, so the check has to happen where the plist is generated.
     const plist = buildLaunchAgentPlist({
-      bunPath: pickBunPath([STABLE, CELLAR], all).path,
+      bunPath: pickBunPath([STABLE, CELLAR], all).path ?? "",
       daemonEntry: "/Users/n/workspace/herddeck/packages/daemon/src/index.ts",
       logPath: "/Users/n/.herddeck/daemon.log",
     });
@@ -1248,5 +1261,149 @@ describe("bun path must survive a package upgrade", () => {
     const io = captureOutput();
     await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), io);
     expect(io.err).toBe("");
+  });
+});
+
+describe("bun path review follow-ups (PR #39)", () => {
+  const STABLE = "/opt/homebrew/bin/bun";
+  const CELLAR = "/opt/homebrew/Cellar/bun/1.4.0/bin/bun";
+
+  // Review finding 1: the regex was anchored and required two numeric
+  // components, so it leaned toward NOT matching — the opposite of the
+  // cost asymmetry. A false positive costs one warning; a false negative
+  // costs the six-day outage.
+  test.each([
+    ["a prerelease Cellar path", "/opt/homebrew/Cellar/bun/1.4.0-beta.1/bin/bun"],
+    ["a nix store path", "/nix/store/abc123def-bun-1.4.0/bin/bun"],
+    ["a version-suffixed dir", "/opt/pkgs/bun-v1.4.0/bin/bun"],
+    ["a date-stamped dir", "/opt/pkgs/bun/2026-08-14/bin/bun"],
+    ["a bare single-component version dir", "/opt/x/2/bin/bun"],
+    ["an asdf install", "/Users/n/.asdf/installs/bun/1.4.0/bin/bun"],
+    ["a volta image", "/Users/n/.volta/tools/image/bun/1.4.0/bin/bun"],
+  ])("now catches %s", (_label, path) => {
+    expect(looksVersionPinned(path)).toBe(true);
+  });
+
+  test.each([
+    ["Homebrew's stable symlink", STABLE],
+    ["/usr/local/bin", "/usr/local/bin/bun"],
+    ["bun's own installer dir", "/Users/n/.bun/bin/bun"],
+    ["a mise shim", "/Users/n/.local/share/mise/shims/bun"],
+    ["a versioned formula alias", "/opt/homebrew/opt/bun@1/bin/bun"],
+  ])("still treats %s as stable", (_label, path) => {
+    expect(looksVersionPinned(path)).toBe(false);
+  });
+
+  // Review finding 2: the production predicate had zero coverage — every
+  // test but one passed `() => true` — and isFile() alone lets a
+  // non-executable file into the plist, where it fails at spawn time.
+  describe("isExecutableFile (the real predicate, not a stub)", () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), "herddeck-exec-"));
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    test("accepts an executable file", () => {
+      const p = join(dir, "bun");
+      writeFileSync(p, "#!/bin/sh\n", { mode: 0o755 });
+      expect(isExecutableFile(p)).toBe(true);
+    });
+
+    test("rejects a file that exists but is not executable", () => {
+      const p = join(dir, "bun");
+      writeFileSync(p, "#!/bin/sh\n", { mode: 0o644 });
+      expect(isExecutableFile(p)).toBe(false);
+    });
+
+    test("rejects a directory and a missing path", () => {
+      expect(isExecutableFile(dir)).toBe(false);
+      expect(isExecutableFile(join(dir, "absent"))).toBe(false);
+    });
+  });
+
+  // Review finding 3: install must refuse rather than write a path it
+  // already knows is unusable.
+  test("install refuses when no usable bun was found", async () => {
+    const io = captureOutput();
+    const code = await runInstall(baseOpts({ exec: noopExec, sleep: noSleep, bunPath: "" }), io);
+    expect(code).toBe(1);
+    expect(io.err).toContain("no usable bun found");
+    // Nothing may be written when we are refusing.
+    expect(existsSync(join(launchAgentsDir, `${LAUNCHD_LABEL}.plist`))).toBe(false);
+  });
+
+  // Review finding 4: PATH order is the right authority for "will this
+  // still exist", but says nothing about version.
+  const versionExec =
+    (reported: string): ExecFn =>
+    async (_cmd, args) => {
+      if (args[0] === "--version") return { stdout: `${reported}\n`, stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
+    };
+  const [major, minor] = Bun.version.split(".");
+
+  test("install warns across the version gap that actually happened", async () => {
+    // 1.3.14 -> 1.4.0 is the upgrade that broke the agent, and it is the
+    // same major. A major comparison could never have fired here — least
+    // of all on the case it was written for.
+    const otherMinor = `${major}.${Number(minor) + 1}.0`;
+    const io = captureOutput();
+    await runInstall(
+      baseOpts({ exec: versionExec(otherMinor), sleep: noSleep, bunPath: STABLE }),
+      io,
+    );
+    expect(io.err).toContain(`is bun ${otherMinor}`);
+    expect(io.err).toContain("check it is the one you meant");
+  });
+
+  test("install stays quiet about a patch-level difference", async () => {
+    // 1.4.0 vs 1.4.1 is not worth a warning; only the line moving is.
+    const io = captureOutput();
+    await runInstall(
+      baseOpts({ exec: versionExec(`${major}.${minor}.999`), sleep: noSleep, bunPath: STABLE }),
+      io,
+    );
+    expect(io.err).toBe("");
+  });
+
+  test("the version check runs before anything is written", async () => {
+    // The warning must describe a decision not yet on disk, so it can be
+    // promoted to a hard failure without moving.
+    const order: string[] = [];
+    const exec: ExecFn = async (_cmd, args) => {
+      order.push(String(args[0]));
+      if (args[0] === "--version")
+        order.push(
+          existsSync(join(launchAgentsDir, `${LAUNCHD_LABEL}.plist`)) ? "plist-exists" : "no-plist",
+        );
+      return args[0] === "--version"
+        ? { stdout: `${Bun.version}\n`, stderr: "", exitCode: 0 }
+        : { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
+    };
+    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), captureOutput());
+    expect(order.slice(0, 2)).toEqual(["--version", "no-plist"]);
+  });
+
+  test("install stays quiet when the version query fails", async () => {
+    // An unreadable --version is not evidence of a mismatch.
+    const exec: ExecFn = async (_cmd, args) => {
+      if (args[0] === "--version") return { stdout: "", stderr: "boom", exitCode: 127 };
+      return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
+    };
+    const io = captureOutput();
+    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), io);
+    expect(io.err).toBe("");
+  });
+
+  test("a pinned path still installs, and still warns", async () => {
+    const exec: ExecFn = async (cmd, args) => {
+      if (args[0] === "--version") return { stdout: `${Bun.version}\n`, stderr: "", exitCode: 0 };
+      return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
+    };
+    const io = captureOutput();
+    const code = await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: CELLAR }), io);
+    expect(code).toBe(0);
+    expect(io.err).toContain("names a version");
   });
 });
