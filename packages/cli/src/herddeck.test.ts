@@ -1385,15 +1385,33 @@ describe("bun path review follow-ups (PR #39)", () => {
     expect(order.slice(0, 2)).toEqual(["--version", "no-plist"]);
   });
 
-  test("install stays quiet when the version query fails", async () => {
-    // An unreadable --version is not evidence of a mismatch.
+  test("install warns when the chosen binary cannot answer --version", async () => {
+    // The earlier version of this stayed silent here, reasoning that an
+    // unreadable --version is not evidence of version skew. True, but it
+    // is evidence of something worse — the thing about to be written into
+    // the plist may not be bun — so the check went quiet exactly when its
+    // subject was most suspect.
     const exec: ExecFn = async (_cmd, args) => {
       if (args[0] === "--version") return { stdout: "", stderr: "boom", exitCode: 127 };
       return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
     };
     const io = captureOutput();
-    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), io);
+    const code = await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), io);
+    expect(io.err).toContain("did not answer --version");
+    expect(io.err).toContain("cannot confirm it is bun");
+    // Still installs: an unanswered probe is a warning, not proof of a
+    // broken binary, and refusing over it would be worse.
+    expect(code).toBe(0);
+  });
+
+  test("a matching version produces no output at all", async () => {
+    const io = captureOutput();
+    const code = await runInstall(
+      baseOpts({ exec: versionExec(Bun.version), sleep: noSleep, bunPath: STABLE }),
+      io,
+    );
     expect(io.err).toBe("");
+    expect(code).toBe(0);
   });
 
   test("a pinned path still installs, and still warns", async () => {
