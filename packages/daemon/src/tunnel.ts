@@ -66,6 +66,11 @@ export interface TunnelManagerOptions {
    * where they read as a broken install. */
   log?: (message: string) => void;
   /** ssh binary/path to spawn. Defaults to "ssh"; tests inject a fake. */
+  /** Overriding this to a non-/usr/bin ssh (e.g. Homebrew's openssh)
+   * breaks the daemon under launchd: its LaunchAgent has no
+   * EnvironmentVariables block, so it runs on the trimmed PATH
+   * (/usr/bin:/bin:/usr/sbin:/sbin) where only the system ssh resolves.
+   * Pass an absolute path if you override it. */
   sshBin?: string;
   /** Poll interval while waiting for the local socket to appear (ms). Default 200. */
   pollIntervalMs?: number;

@@ -12,6 +12,7 @@
 // re-derived here with small, deliberately minimal readers instead of
 // sharing daemon/src/config.ts's full TOML parser.
 
+import { accessSync, constants as fsConstants } from "node:fs";
 import {
   cpSync,
   existsSync,
@@ -110,24 +111,54 @@ function defaultExec(): ExecFn {
 }
 
 /**
- * A path segment that names a version — `1.4.0`, `v1.4.0`, `3.14`.
- * Homebrew's Cellar, mise's installs, and every other versioned package
- * layout put one of these in the path, and the directory is deleted on
- * upgrade.
+ * Version-shaped tokens in a path segment. Deliberately biased toward
+ * matching, because the two failure directions do not cost the same:
+ *
+ *   false positive -> one extra warning, install proceeds, daemon runs
+ *   false negative -> the six-day outage this whole file exists to stop
+ *
+ * That is only safe because the paths we must NOT match carry no digits
+ * at all — `/opt/homebrew/bin/bun`, `/usr/local/bin/bun`,
+ * `~/.bun/bin/bun`, mise's `shims/bun`. A Homebrew versioned-formula
+ * alias like `bun@1` is the one near miss, and it survives: it is
+ * neither dotted nor a bare number.
  */
-const VERSION_SEGMENT = /^v?\d+(\.\d+)+$/;
+const DOTTED_VERSION = /\d+\.\d+/; // 1.4.0, 3.14, v1.4.0, 1.4.0-beta.1, bun-v1.4.0
+const BARE_VERSION_DIR = /^v?\d+$/; // /opt/x/2/bin/bun
+const DATE_STAMP = /\d{4}-\d{2}-\d{2}/; // 2026-08-14
 
 /**
  * Whether a path will stop existing the next time its package manager
  * upgrades. `/opt/homebrew/bin/bun` survives; the Cellar path it points
  * at does not.
+ *
+ * `/nix/store` is called out separately: its entries are immutable and
+ * garbage-collected, so every path under it is pinned by construction
+ * even when the hash-prefixed segment does not look like a version.
  */
 export function looksVersionPinned(path: string): boolean {
-  return path.split("/").some((segment) => VERSION_SEGMENT.test(segment));
+  if (path.startsWith("/nix/store/")) return true;
+  return path
+    .split("/")
+    .some((seg) => DOTTED_VERSION.test(seg) || BARE_VERSION_DIR.test(seg) || DATE_STAMP.test(seg));
+}
+
+/** Whether a path exists and is executable. `isFile()` alone is not
+ * enough: a present but non-executable file passes it, goes into the
+ * plist, and fails only when launchd tries to spawn it. */
+export function isExecutableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    accessSync(path, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export interface BunPathChoice {
-  path: string;
+  /** null when no candidate was usable — install must refuse, not guess. */
+  path: string | null;
   /** True when no upgrade-proof candidate existed and we had to settle. */
   pinned: boolean;
 }
@@ -147,11 +178,16 @@ export interface BunPathChoice {
  *
  * So prefer whatever a shell would run (`Bun.which("bun")`, normally the
  * stable `/opt/homebrew/bin/bun` symlink) and fall back through the
- * candidates, skipping any that names a version. If every candidate is
- * version-pinned the first usable one is still returned — installing a
- * daemon that runs today beats refusing to install — but `pinned` is set
- * so the caller can say so out loud at install time rather than leaving it
- * to be discovered months later.
+ * candidates, skipping any that names a version.
+ *
+ * Two "we could not do better" cases, which must not be conflated:
+ *
+ *   every candidate pinned -> install it and warn. A daemon that runs
+ *     today beats refusing to install, and the warning gets the problem
+ *     heard now instead of after the next upgrade.
+ *   no candidate usable    -> return null. There is no daemon that runs
+ *     today, so writing a path anyway just reproduces the exact failure
+ *     this fix exists to prevent, moved forward to install time.
  */
 export function pickBunPath(
   candidates: Array<string | null | undefined>,
@@ -160,8 +196,7 @@ export function pickBunPath(
   const usable = candidates.filter((c): c is string => Boolean(c)).filter(isUsable);
   const stable = usable.find((c) => !looksVersionPinned(c));
   if (stable) return { path: stable, pinned: false };
-  const fallback = usable[0] ?? process.execPath;
-  return { path: fallback, pinned: true };
+  return { path: usable[0] ?? null, pinned: usable.length > 0 };
 }
 
 export function defaultCliOptions(): CliOptions {
@@ -178,13 +213,9 @@ export function defaultCliOptions(): CliOptions {
     configPath: join(herddeckDir, "config.toml"),
     launchAgentsDir: join(home, "Library", "LaunchAgents"),
     repoRoot,
-    bunPath: pickBunPath([Bun.which("bun"), process.execPath], (p) => {
-      try {
-        return statSync(p).isFile();
-      } catch {
-        return false;
-      }
-    }).path,
+    // "" when nothing usable was found. Only install cares, and it
+    // refuses loudly; every other command must keep working.
+    bunPath: pickBunPath([Bun.which("bun"), process.execPath], isExecutableFile).path ?? "",
     uid: String(process.getuid?.() ?? 501),
     fetchImpl: fetch,
     exec: defaultExec(),
@@ -901,6 +932,15 @@ export async function runStatus(
 // ---------------------------------------------------------------------------
 
 export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
+  // No usable bun means there is no daemon that runs today, so writing a
+  // plist anyway would only reproduce the exit-78 loop this fix exists to
+  // prevent — with the install pretending to have succeeded.
+  if (!opts.bunPath) {
+    io.stderr(
+      "no usable bun found: nothing on PATH and this process's own interpreter is not executable.\n  Install bun (brew install oven-sh/bun/bun) and re-run.\n",
+    );
+    return 1;
+  }
   mkdirSync(opts.herddeckDir, { recursive: true });
 
   const daemonEntry = join(opts.repoRoot, "packages", "daemon", "src", "index.ts");
@@ -912,6 +952,21 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
   // Say it now rather than let it surface as a dead daemon months from
   // now: a version in this path means the next upgrade of that package
   // deletes the binary launchd is told to run.
+  // PATH order answers "what will still exist in six months", which is
+  // the right question — but it knows nothing about version, so a stale
+  // bun earlier on PATH can be baked in while install runs a newer one.
+  // Warn rather than fail: the daemon has no known incompatibility with
+  // an adjacent version, and refusing to install over it would be worse
+  // than saying so.
+  const version = await opts.exec(opts.bunPath, ["--version"]);
+  const chosenMajor = version.stdout.trim().split(".")[0];
+  const runningMajor = Bun.version.split(".")[0];
+  if (version.exitCode === 0 && chosenMajor && chosenMajor !== runningMajor) {
+    io.stderr(
+      `warning: ${opts.bunPath} is bun ${version.stdout.trim()}, but install is running bun ${Bun.version}.\n  The daemon will run under the former; check it is the one you meant.\n`,
+    );
+  }
+
   if (looksVersionPinned(opts.bunPath)) {
     io.stderr(
       `warning: ${opts.bunPath} names a version, so upgrading bun will break this agent.\n  Put a stable \`bun\` on PATH (e.g. Homebrew's /opt/homebrew/bin/bun) and re-run install.\n`,
