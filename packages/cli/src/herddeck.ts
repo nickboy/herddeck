@@ -59,7 +59,8 @@ export interface CliOptions {
   launchAgentsDir: string;
   /** Repo root, used to locate packages/daemon/src/index.ts for the plist. */
   repoRoot: string;
-  /** Absolute path to the bun executable running this process. */
+  /** Absolute path to the bun executable for ProgramArguments[0]. Must
+   * survive a package-manager upgrade — see pickBunPath. */
   bunPath: string;
   uid: string;
   fetchImpl: FetchLike;
@@ -108,6 +109,61 @@ function defaultExec(): ExecFn {
   };
 }
 
+/**
+ * A path segment that names a version — `1.4.0`, `v1.4.0`, `3.14`.
+ * Homebrew's Cellar, mise's installs, and every other versioned package
+ * layout put one of these in the path, and the directory is deleted on
+ * upgrade.
+ */
+const VERSION_SEGMENT = /^v?\d+(\.\d+)+$/;
+
+/**
+ * Whether a path will stop existing the next time its package manager
+ * upgrades. `/opt/homebrew/bin/bun` survives; the Cellar path it points
+ * at does not.
+ */
+export function looksVersionPinned(path: string): boolean {
+  return path.split("/").some((segment) => VERSION_SEGMENT.test(segment));
+}
+
+export interface BunPathChoice {
+  path: string;
+  /** True when no upgrade-proof candidate existed and we had to settle. */
+  pinned: boolean;
+}
+
+/**
+ * Choose the bun path to bake into the LaunchAgent.
+ *
+ * `process.execPath` is the obvious answer and the wrong one: Bun reports
+ * where it really lives, not the symlink it was invoked through, so a
+ * plist written from it names `/opt/homebrew/Cellar/bun/<version>/bin/bun`.
+ * That works until the next `brew upgrade bun` deletes the directory, at
+ * which point launchd cannot spawn the daemon and retries forever with
+ * exit code 78 (EX_CONFIG). Observed in the field: the agent was down for
+ * six days after bun went 1.3.14 -> 1.4.0, with nothing in the log but a
+ * clean shutdown, because nothing had crashed — it simply could never
+ * start again.
+ *
+ * So prefer whatever a shell would run (`Bun.which("bun")`, normally the
+ * stable `/opt/homebrew/bin/bun` symlink) and fall back through the
+ * candidates, skipping any that names a version. If every candidate is
+ * version-pinned the first usable one is still returned — installing a
+ * daemon that runs today beats refusing to install — but `pinned` is set
+ * so the caller can say so out loud at install time rather than leaving it
+ * to be discovered months later.
+ */
+export function pickBunPath(
+  candidates: Array<string | null | undefined>,
+  isUsable: (path: string) => boolean,
+): BunPathChoice {
+  const usable = candidates.filter((c): c is string => Boolean(c)).filter(isUsable);
+  const stable = usable.find((c) => !looksVersionPinned(c));
+  if (stable) return { path: stable, pinned: false };
+  const fallback = usable[0] ?? process.execPath;
+  return { path: fallback, pinned: true };
+}
+
 export function defaultCliOptions(): CliOptions {
   const home = homedir();
   const herddeckDir = join(home, ".herddeck");
@@ -122,7 +178,13 @@ export function defaultCliOptions(): CliOptions {
     configPath: join(herddeckDir, "config.toml"),
     launchAgentsDir: join(home, "Library", "LaunchAgents"),
     repoRoot,
-    bunPath: process.execPath,
+    bunPath: pickBunPath([Bun.which("bun"), process.execPath], (p) => {
+      try {
+        return statSync(p).isFile();
+      } catch {
+        return false;
+      }
+    }).path,
     uid: String(process.getuid?.() ?? 501),
     fetchImpl: fetch,
     exec: defaultExec(),
@@ -847,6 +909,14 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
 
   writeLaunchAgentPlist(plistPath, { bunPath: opts.bunPath, daemonEntry, logPath });
   io.stdout(`wrote LaunchAgent plist: ${plistPath}\n`);
+  // Say it now rather than let it surface as a dead daemon months from
+  // now: a version in this path means the next upgrade of that package
+  // deletes the binary launchd is told to run.
+  if (looksVersionPinned(opts.bunPath)) {
+    io.stderr(
+      `warning: ${opts.bunPath} names a version, so upgrading bun will break this agent.\n  Put a stable \`bun\` on PATH (e.g. Homebrew's /opt/homebrew/bin/bun) and re-run install.\n`,
+    );
+  }
 
   // Re-running install is the documented upgrade path, but launchd
   // refuses to bootstrap an already-loaded label ("Bootstrap failed: 5:

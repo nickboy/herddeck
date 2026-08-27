@@ -17,7 +17,9 @@ import {
   checkSshPrecheck,
   formatDoctor,
   isLaunchAgentPlistOurs,
+  looksVersionPinned,
   parseHerdrStatus,
+  pickBunPath,
   readConfiguredPort,
   readRemoteTargetHosts,
   readRemoteTargetNames,
@@ -1157,5 +1159,94 @@ describe("install: launchd bootout/bootstrap race", () => {
     expect(code).toBe(0);
     expect(calls.some((c) => c[1] === "bootout")).toBe(false);
     expect(io.out).toContain("bootstrapped");
+  });
+});
+
+describe("bun path must survive a package upgrade", () => {
+  // The real paths from the machine where this broke. `process.execPath`
+  // reports where bun actually lives, not the symlink it was invoked
+  // through, so install baked a Cellar path into the plist. Six days after
+  // bun went 1.3.14 -> 1.4.0 the daemon was still down, launchd looping on
+  // a binary brew had deleted, exit code 78 (EX_CONFIG).
+  const STABLE = "/opt/homebrew/bin/bun";
+  const CELLAR = "/opt/homebrew/Cellar/bun/1.4.0/bin/bun";
+  const BROKEN = "/opt/homebrew/Cellar/bun/1.3.14/bin/bun";
+  const all = () => true;
+
+  test("recognises the path that actually broke", () => {
+    expect(looksVersionPinned(BROKEN)).toBe(true);
+    expect(looksVersionPinned(CELLAR)).toBe(true);
+    expect(looksVersionPinned(STABLE)).toBe(false);
+  });
+
+  test.each([
+    ["mise install dir", "/Users/n/.local/share/mise/installs/bun/1.4.0/bin/bun", true],
+    ["a v-prefixed version", "/opt/x/v1.4.0/bin/bun", true],
+    ["a two-part version", "/opt/x/3.14/bin/bun", true],
+    ["a mise shim", "/Users/n/.local/share/mise/shims/bun", false],
+    ["a versioned formula alias", "/opt/homebrew/opt/bun@1/bin/bun", false],
+    ["/usr/local/bin", "/usr/local/bin/bun", false],
+  ])("classifies %s", (_label, path, pinned) => {
+    expect(looksVersionPinned(path)).toBe(pinned);
+  });
+
+  test("prefers the stable symlink over the interpreter's own path", () => {
+    // Exactly the pair defaultCliOptions() sees on this machine.
+    expect(pickBunPath([STABLE, CELLAR], all)).toEqual({ path: STABLE, pinned: false });
+  });
+
+  test("takes a stable candidate even when it is not first", () => {
+    expect(pickBunPath([CELLAR, STABLE], all).path).toBe(STABLE);
+  });
+
+  test("skips candidates that do not exist", () => {
+    const exists = (p: string) => p !== STABLE;
+    // The stable path is absent, so the pinned one is all that is left.
+    expect(pickBunPath([STABLE, CELLAR], exists)).toEqual({ path: CELLAR, pinned: true });
+  });
+
+  test("still installs when every candidate is version-pinned, but flags it", () => {
+    // Refusing to install would be worse than installing something that
+    // runs today; the caller warns instead.
+    expect(pickBunPath([CELLAR], all)).toEqual({ path: CELLAR, pinned: true });
+  });
+
+  test("ignores null and undefined candidates", () => {
+    expect(pickBunPath([null, undefined, STABLE], all).path).toBe(STABLE);
+  });
+
+  test("the generated plist carries no version number", () => {
+    // The assertion that would have caught this at install time. A bad
+    // path looks perfectly correct in the plist and only fails months
+    // later, so the check has to happen where the plist is generated.
+    const plist = buildLaunchAgentPlist({
+      bunPath: pickBunPath([STABLE, CELLAR], all).path,
+      daemonEntry: "/Users/n/workspace/herddeck/packages/daemon/src/index.ts",
+      logPath: "/Users/n/.herddeck/daemon.log",
+    });
+    const programArg = /<array>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1] ?? "";
+    expect(programArg).toBe(STABLE);
+    expect(looksVersionPinned(programArg)).toBe(false);
+  });
+
+  test("install warns when it can only write a version-pinned path", async () => {
+    const exec: ExecFn = async (_cmd, args) =>
+      args[0] === "print"
+        ? { stdout: "", stderr: "", exitCode: 1 }
+        : { stdout: "", stderr: "", exitCode: 0 };
+    const io = captureOutput();
+    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: CELLAR }), io);
+    expect(io.err).toContain("names a version");
+    expect(io.err).toContain("upgrading bun will break this agent");
+  });
+
+  test("install stays quiet about a stable path", async () => {
+    const exec: ExecFn = async (_cmd, args) =>
+      args[0] === "print"
+        ? { stdout: "", stderr: "", exitCode: 1 }
+        : { stdout: "", stderr: "", exitCode: 0 };
+    const io = captureOutput();
+    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), io);
+    expect(io.err).toBe("");
   });
 });
