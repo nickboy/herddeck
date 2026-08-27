@@ -122,6 +122,14 @@ function defaultExec(): ExecFn {
  * `~/.bun/bin/bun`, mise's `shims/bun`. A Homebrew versioned-formula
  * alias like `bun@1` is the one near miss, and it survives: it is
  * neither dotted nor a bare number.
+ *
+ * One known false positive, kept deliberately: a Homebrew versioned
+ * formula carrying a minor — `bun@1.1`, `node@20.1` — contains a dotted
+ * pair, so it is flagged pinned even though its `opt` symlink is stable
+ * across patch upgrades of that line. The cost is one spurious warning
+ * and a working install. Do NOT fix it by narrowing the dotted pattern:
+ * that reopens `1.4.0-beta.1` and every other real hole, trading a
+ * harmless warning for the outage.
  */
 const DOTTED_VERSION = /\d+\.\d+/; // 1.4.0, 3.14, v1.4.0, 1.4.0-beta.1, bun-v1.4.0
 const BARE_VERSION_DIR = /^v?\d+$/; // /opt/x/2/bin/bun
@@ -145,7 +153,12 @@ export function looksVersionPinned(path: string): boolean {
 
 /** Whether a path exists and is executable. `isFile()` alone is not
  * enough: a present but non-executable file passes it, goes into the
- * plist, and fails only when launchd tries to spawn it. */
+ * plist, and fails only when launchd tries to spawn it.
+ *
+ * Its tests use real chmod'd files rather than an injected fs, because
+ * interrogating the filesystem is the whole job. The one environment
+ * where that bites is a `noexec` mount, where the 0o755 case would fail
+ * for reasons unrelated to the code. */
 export function isExecutableFile(path: string): boolean {
   try {
     if (!statSync(path).isFile()) return false;
@@ -947,26 +960,34 @@ export async function runInstall(opts: CliOptions, io: CliIO): Promise<number> {
   const logPath = join(opts.herddeckDir, "daemon.log");
   const plistPath = join(opts.launchAgentsDir, `${LAUNCHD_LABEL}.plist`);
 
-  writeLaunchAgentPlist(plistPath, { bunPath: opts.bunPath, daemonEntry, logPath });
-  io.stdout(`wrote LaunchAgent plist: ${plistPath}\n`);
-  // Say it now rather than let it surface as a dead daemon months from
-  // now: a version in this path means the next upgrade of that package
-  // deletes the binary launchd is told to run.
   // PATH order answers "what will still exist in six months", which is
   // the right question — but it knows nothing about version, so a stale
   // bun earlier on PATH can be baked in while install runs a newer one.
-  // Warn rather than fail: the daemon has no known incompatibility with
-  // an adjacent version, and refusing to install over it would be worse
-  // than saying so.
+  //
+  // Compare major.minor, not major. Every bun release so far is major 1,
+  // and the incident that motivated all of this was 1.3.14 -> 1.4.0 — so
+  // a major comparison could never fire, least of all on the case it was
+  // written for. Minor warns across 1.3.x -> 1.4.x and stays quiet for
+  // 1.4.0 vs 1.4.1, which is the balance worth having.
+  //
+  // Warn rather than fail: no incompatibility with an adjacent version
+  // is known, and refusing to install over one would be worse. Runs
+  // before anything is written, so the warning describes a decision not
+  // yet on disk and can be promoted to a hard failure without moving.
   const version = await opts.exec(opts.bunPath, ["--version"]);
-  const chosenMajor = version.stdout.trim().split(".")[0];
-  const runningMajor = Bun.version.split(".")[0];
-  if (version.exitCode === 0 && chosenMajor && chosenMajor !== runningMajor) {
+  const minorOf = (v: string) => v.trim().split(".").slice(0, 2).join(".");
+  const chosen = minorOf(version.stdout);
+  if (version.exitCode === 0 && chosen && chosen !== minorOf(Bun.version)) {
     io.stderr(
       `warning: ${opts.bunPath} is bun ${version.stdout.trim()}, but install is running bun ${Bun.version}.\n  The daemon will run under the former; check it is the one you meant.\n`,
     );
   }
 
+  writeLaunchAgentPlist(plistPath, { bunPath: opts.bunPath, daemonEntry, logPath });
+  io.stdout(`wrote LaunchAgent plist: ${plistPath}\n`);
+  // Say it now rather than let it surface as a dead daemon months from
+  // now: a version in this path means the next upgrade of that package
+  // deletes the binary launchd is told to run.
   if (looksVersionPinned(opts.bunPath)) {
     io.stderr(
       `warning: ${opts.bunPath} names a version, so upgrading bun will break this agent.\n  Put a stable \`bun\` on PATH (e.g. Homebrew's /opt/homebrew/bin/bun) and re-run install.\n`,

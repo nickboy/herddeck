@@ -1335,20 +1335,59 @@ describe("bun path review follow-ups (PR #39)", () => {
 
   // Review finding 4: PATH order is the right authority for "will this
   // still exist", but says nothing about version.
-  test("install warns when the chosen bun is a different major", async () => {
-    const exec: ExecFn = async (cmd, args) => {
-      if (args[0] === "--version") return { stdout: "0.9.9\n", stderr: "", exitCode: 0 };
+  const versionExec =
+    (reported: string): ExecFn =>
+    async (_cmd, args) => {
+      if (args[0] === "--version") return { stdout: `${reported}\n`, stderr: "", exitCode: 0 };
       return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
     };
+  const [major, minor] = Bun.version.split(".");
+
+  test("install warns across the version gap that actually happened", async () => {
+    // 1.3.14 -> 1.4.0 is the upgrade that broke the agent, and it is the
+    // same major. A major comparison could never have fired here — least
+    // of all on the case it was written for.
+    const otherMinor = `${major}.${Number(minor) + 1}.0`;
     const io = captureOutput();
-    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), io);
-    expect(io.err).toContain("is bun 0.9.9");
+    await runInstall(
+      baseOpts({ exec: versionExec(otherMinor), sleep: noSleep, bunPath: STABLE }),
+      io,
+    );
+    expect(io.err).toContain(`is bun ${otherMinor}`);
     expect(io.err).toContain("check it is the one you meant");
+  });
+
+  test("install stays quiet about a patch-level difference", async () => {
+    // 1.4.0 vs 1.4.1 is not worth a warning; only the line moving is.
+    const io = captureOutput();
+    await runInstall(
+      baseOpts({ exec: versionExec(`${major}.${minor}.999`), sleep: noSleep, bunPath: STABLE }),
+      io,
+    );
+    expect(io.err).toBe("");
+  });
+
+  test("the version check runs before anything is written", async () => {
+    // The warning must describe a decision not yet on disk, so it can be
+    // promoted to a hard failure without moving.
+    const order: string[] = [];
+    const exec: ExecFn = async (_cmd, args) => {
+      order.push(String(args[0]));
+      if (args[0] === "--version")
+        order.push(
+          existsSync(join(launchAgentsDir, `${LAUNCHD_LABEL}.plist`)) ? "plist-exists" : "no-plist",
+        );
+      return args[0] === "--version"
+        ? { stdout: `${Bun.version}\n`, stderr: "", exitCode: 0 }
+        : { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
+    };
+    await runInstall(baseOpts({ exec, sleep: noSleep, bunPath: STABLE }), captureOutput());
+    expect(order.slice(0, 2)).toEqual(["--version", "no-plist"]);
   });
 
   test("install stays quiet when the version query fails", async () => {
     // An unreadable --version is not evidence of a mismatch.
-    const exec: ExecFn = async (cmd, args) => {
+    const exec: ExecFn = async (_cmd, args) => {
       if (args[0] === "--version") return { stdout: "", stderr: "boom", exitCode: 127 };
       return { stdout: "", stderr: "", exitCode: args[0] === "print" ? 1 : 0 };
     };
